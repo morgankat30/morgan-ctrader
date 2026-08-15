@@ -28,6 +28,11 @@ signals, no fake wallet balance.
   and arming on a live account asks for a confirmation first.
 - **Auto-execute starts OFF.** You review the signal and confirmation score yourself
   and tap BUY/SELL, until you trust it enough to flip auto on.
+- **"Remember on this device" is OFF by default.** Flip it on next to Connect if you
+  want your keys pre-filled next time — they're saved in this browser's local storage
+  on your phone only, never sent anywhere else. A "Forget saved login details" button
+  appears on the broker-choice screen once anything is saved, so you can clear it any
+  time (e.g. before lending someone your phone).
 
 ## One-time setup
 

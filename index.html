@@ -104,6 +104,8 @@ a{color:var(--cyan);}
         <p class="small">You can only use one at a time per session — pick which account this session connects to.</p>
         <button class="btn-ghost" style="width:100%; margin-top:10px;" onclick="chooseBroker('ctrader')">cTrader — forex + crypto CFDs (Pepperstone)</button>
         <button class="btn-ghost" style="width:100%; margin-top:10px;" onclick="chooseBroker('binance')">Binance — crypto only, instant setup, faster ticks</button>
+        <p class="small" style="margin-top:8px;" id="relayHint"></p>
+        <button class="btn-danger" style="width:100%; margin-top:16px;" id="btnForgetAll" onclick="forgetSaved()" hidden>Forget saved login details</button>
       </div>
     </section>
 
@@ -125,6 +127,10 @@ a{color:var(--cyan);}
           <option value="demo">Demo account (paper money — start here)</option>
           <option value="live">Live account (real money)</option>
         </select>
+        <div class="toggle" style="border:none; padding-top:12px;">
+          <div><b>Remember on this device</b><div class="small">Saves these fields in this browser so you don't retype them. Anyone with access to this phone/browser could see them.</div></div>
+          <div class="switch" id="swRememberCt" onclick="toggleRemember('ctrader')"></div>
+        </div>
         <button class="btn-ghost" style="width:100%; margin-top:12px;" id="btnAuthorize">LOG IN WITH CTRADER TO GET A TOKEN</button>
         <div class="small" id="authCodeBox" style="margin-top:10px;"></div>
         <button class="btn-primary" id="btnConnect">CONNECT</button>
@@ -163,6 +169,10 @@ a{color:var(--cyan);}
         </select>
         <label>Relay address (Termux)</label>
         <input id="bnRelayUrl" value="http://localhost:8788">
+        <div class="toggle" style="border:none; padding-top:12px;">
+          <div><b>Remember on this device</b><div class="small">Saves these fields in this browser so you don't retype them. Anyone with access to this phone/browser could see them.</div></div>
+          <div class="switch" id="swRememberBn" onclick="toggleRemember('binance')"></div>
+        </div>
         <button class="btn-primary" id="bnBtnConnect">CONNECT</button>
         <div class="warn-box" id="bnLiveWarnBox" hidden>
           You selected LIVE. Real orders will only be sent if you separately arm live execution on the dashboard.
@@ -334,16 +344,98 @@ let bnSockets = {};       // key -> WebSocket for Binance market stream
 
 const $ = id => document.getElementById(id);
 
+const RELAY_ORIGIN = 'http://localhost:8788';
+function onRelayHost(){
+  return location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+}
+
 function chooseBroker(broker){
+  if(broker === 'binance' && !onRelayHost()){
+    // Jump to the Termux-hosted copy so real orders work without manual retyping.
+    // If the relay isn't actually running right now, the browser will show its own
+    // connection-error page here — that's a browser limit, this app can't detect
+    // that in advance from an https page.
+    location.href = RELAY_ORIGIN + '/index.html?broker=binance';
+    return;
+  }
   state.broker = broker;
   $('brokerSelect').hidden = true;
-  if(broker === 'ctrader'){ $('setupPanel').hidden = false; }
-  else { $('setupPanelBinance').hidden = false; }
+  if(broker === 'ctrader'){ $('setupPanel').hidden = false; restoreSaved('ctrader'); }
+  else { $('setupPanelBinance').hidden = false; restoreSaved('binance'); }
 }
 function backToBrokerSelect(){
+
   $('setupPanel').hidden = true;
   $('setupPanelBinance').hidden = true;
   $('brokerSelect').hidden = false;
+}
+
+/* ---------------- Remember-on-device (opt-in, plain localStorage on this phone only) ---------------- */
+
+function toggleRemember(broker){
+  const id = broker === 'ctrader' ? 'swRememberCt' : 'swRememberBn';
+  const on = $(id).classList.toggle('on');
+  if(!on){
+    const prefix = broker === 'ctrader' ? 'morganai_ct_' : 'morganai_bn_';
+    Object.keys(localStorage).filter(k => k.startsWith(prefix)).forEach(k => localStorage.removeItem(k));
+    updateForgetButtonVisibility();
+  }
+}
+
+function saveIfRemembering(broker){
+  if(broker === 'ctrader'){
+    if(!$('swRememberCt').classList.contains('on')) return;
+    localStorage.setItem('morganai_ct_clientId', $('inClientId').value.trim());
+    localStorage.setItem('morganai_ct_clientSecret', $('inClientSecret').value.trim());
+    localStorage.setItem('morganai_ct_accessToken', $('inAccessToken').value.trim());
+    localStorage.setItem('morganai_ct_refreshToken', $('inRefreshToken').value.trim());
+    localStorage.setItem('morganai_ct_env', $('inEnv').value);
+  } else {
+    if(!$('swRememberBn').classList.contains('on')) return;
+    localStorage.setItem('morganai_bn_apiKey', $('bnApiKey').value.trim());
+    localStorage.setItem('morganai_bn_apiSecret', $('bnApiSecret').value.trim());
+    localStorage.setItem('morganai_bn_env', $('bnEnv').value);
+    localStorage.setItem('morganai_bn_relayUrl', $('bnRelayUrl').value.trim());
+  }
+  updateForgetButtonVisibility();
+}
+
+function restoreSaved(broker){
+  if(broker === 'ctrader'){
+    const id = localStorage.getItem('morganai_ct_clientId');
+    if(id === null) return;
+    $('inClientId').value = id;
+    $('inClientSecret').value = localStorage.getItem('morganai_ct_clientSecret') || '';
+    $('inAccessToken').value = localStorage.getItem('morganai_ct_accessToken') || '';
+    $('inRefreshToken').value = localStorage.getItem('morganai_ct_refreshToken') || '';
+    $('inEnv').value = localStorage.getItem('morganai_ct_env') || 'demo';
+    $('inEnv').dispatchEvent(new Event('change'));
+    $('swRememberCt').classList.add('on');
+  } else {
+    const key = localStorage.getItem('morganai_bn_apiKey');
+    if(key === null) return;
+    $('bnApiKey').value = key;
+    $('bnApiSecret').value = localStorage.getItem('morganai_bn_apiSecret') || '';
+    $('bnEnv').value = localStorage.getItem('morganai_bn_env') || 'testnet';
+    $('bnRelayUrl').value = localStorage.getItem('morganai_bn_relayUrl') || 'http://localhost:8788';
+    $('bnEnv').dispatchEvent(new Event('change'));
+    $('swRememberBn').classList.add('on');
+  }
+}
+
+function updateForgetButtonVisibility(){
+  const any = Object.keys(localStorage).some(k => k.startsWith('morganai_ct_') || k.startsWith('morganai_bn_'));
+  $('btnForgetAll').hidden = !any;
+}
+
+function forgetSaved(){
+  if(!confirm('Remove all saved login details from this device?')) return;
+  Object.keys(localStorage).filter(k => k.startsWith('morganai_')).forEach(k => localStorage.removeItem(k));
+  $('swRememberCt').classList.remove('on');
+  $('swRememberBn').classList.remove('on');
+  $('inClientId').value=''; $('inClientSecret').value=''; $('inAccessToken').value=''; $('inRefreshToken').value='';
+  $('bnApiKey').value=''; $('bnApiSecret').value='';
+  updateForgetButtonVisibility();
 }
 
 function log(msg, target){
@@ -369,6 +461,7 @@ $('btnConnect').onclick = () => {
     alert('Client ID, Client Secret and Access Token are all required.');
     return;
   }
+  saveIfRemembering('ctrader');
   connect();
 };
 $('inEnv').onchange = () => { $('liveWarnBox').hidden = $('inEnv').value !== 'live'; };
@@ -434,6 +527,19 @@ function showManualExchange(code, clientId, clientSecret, box, reason){
     + '<div class="logs" style="height:auto; margin-top:6px; user-select:all;">' + escapeHtml(cmd) + '</div>';
 }
 handleOAuthRedirect();
+updateForgetButtonVisibility();
+if($('relayHint')) $('relayHint').textContent = onRelayHost()
+  ? 'You\'re on the Termux-hosted copy — Binance orders can go through directly.'
+  : 'Tapping Binance will jump to http://localhost:8788 so real orders work — make sure binance_relay.py is running in Termux first.';
+
+// If we just arrived here from the GitHub-hosted page choosing Binance, skip straight to it.
+(function autoOpenFromRedirect(){
+  const wantBroker = new URLSearchParams(location.search).get('broker');
+  if(wantBroker === 'binance'){
+    chooseBroker('binance');
+    history.replaceState({}, '', location.pathname);
+  }
+})();
 
 /* ============================================================
    BINANCE — crypto-only path. Prices stream direct to browser.
@@ -449,6 +555,7 @@ $('bnBtnConnect').onclick = () => {
   state.bnEnv = $('bnEnv').value;
   state.bnRelayUrl = $('bnRelayUrl').value.trim().replace(/\/$/, '');
   if(!state.bnApiKey || !state.bnApiSecret){ alert('API Key and Secret are both required.'); return; }
+  saveIfRemembering('binance');
   bnConnect();
 };
 
