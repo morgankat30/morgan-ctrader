@@ -97,8 +97,18 @@ a{color:var(--cyan);}
 
   <main>
 
-    <!-- SETUP -->
-    <section id="setupPanel">
+    <!-- BROKER SELECT -->
+    <section id="brokerSelect">
+      <div class="panel">
+        <h2>Choose broker</h2>
+        <p class="small">You can only use one at a time per session — pick which account this session connects to.</p>
+        <button class="btn-ghost" style="width:100%; margin-top:10px;" onclick="chooseBroker('ctrader')">cTrader — forex + crypto CFDs (Pepperstone)</button>
+        <button class="btn-ghost" style="width:100%; margin-top:10px;" onclick="chooseBroker('binance')">Binance — crypto only, instant setup, faster ticks</button>
+      </div>
+    </section>
+
+    <!-- SETUP: CTRADER -->
+    <section id="setupPanel" hidden>
       <div class="panel">
         <h2>Connect cTrader Open API</h2>
         <p class="small">This connects to your real cTrader Open API application and a real trading account (demo or live). Nothing is sent to any third-party wallet — only to cTrader's own servers.</p>
@@ -107,7 +117,7 @@ a{color:var(--cyan);}
         <label>Client Secret</label>
         <input id="inClientSecret" type="password" placeholder="Application Client Secret">
         <label>Access Token</label>
-        <input id="inAccessToken" type="password" placeholder="Access Token (from Playground or OAuth)">
+        <input id="inAccessToken" type="password" placeholder="Access Token (from cTrader login below)">
         <label>Refresh Token (optional)</label>
         <input id="inRefreshToken" type="password" placeholder="Refresh Token">
         <label>Environment</label>
@@ -115,20 +125,58 @@ a{color:var(--cyan);}
           <option value="demo">Demo account (paper money — start here)</option>
           <option value="live">Live account (real money)</option>
         </select>
+        <button class="btn-ghost" style="width:100%; margin-top:12px;" id="btnAuthorize">LOG IN WITH CTRADER TO GET A TOKEN</button>
+        <div class="small" id="authCodeBox" style="margin-top:10px;"></div>
         <button class="btn-primary" id="btnConnect">CONNECT</button>
         <div class="warn-box" id="liveWarnBox" hidden>
           You selected LIVE. This will authorize against your real cTrader account. Trades will only be sent if you separately arm live execution on the dashboard — connecting alone does not place any trade.
         </div>
-        <p class="small" style="margin-top:12px;">Don't have a Client ID/Secret/Access Token yet? See the setup steps at the bottom of this page.</p>
+        <p class="small" style="margin-top:12px;">Need the Client ID/Secret first? See the setup steps at the bottom of this page.</p>
       </div>
       <div class="panel">
         <h2>Setup steps</h2>
         <p class="small">
           1. Register a broker account that supports cTrader (link provided separately).<br>
           2. Go to <a href="https://openapi.ctrader.com/apps" target="_blank">openapi.ctrader.com/apps</a> and log in with your cTrader ID.<br>
-          3. Create a new application (any name/description) and wait for approval.<br>
-          4. Open the app's <b>Playground</b> button — pick "trading" scope — and click "Get token". This gives you an Access Token + Refresh Token for your own account without building OAuth screens.<br>
-          5. Paste the Client ID, Client Secret and Access Token above. Start on Demo.
+          3. Create a new application (any name/description) — this works even while status shows "Submitted".<br>
+          4. Copy its Client ID and Client Secret into the fields above.<br>
+          5. Tap <b>Log in with cTrader to get a token</b> below — that's a real login/authorize screen, separate from the Sandbox tool, and it works without waiting for approval.<br>
+          6. After you approve, you'll land back here with a token filled in automatically. Tap Connect. Start on Demo.
+        </p>
+        <button class="btn-ghost" style="width:100%; margin-top:10px;" onclick="backToBrokerSelect()">‹ Choose a different broker</button>
+      </div>
+    </section>
+
+    <!-- SETUP: BINANCE -->
+    <section id="setupPanelBinance" hidden>
+      <div class="panel">
+        <h2>Connect Binance</h2>
+        <p class="small">Crypto only, no approval wait. Prices stream straight to this page. Placing real orders needs a tiny local relay running in Termux (Binance blocks browsers from sending signed orders directly) — see below.</p>
+        <label>API Key</label>
+        <input id="bnApiKey" placeholder="Binance API Key">
+        <label>API Secret</label>
+        <input id="bnApiSecret" type="password" placeholder="Binance API Secret">
+        <label>Environment</label>
+        <select id="bnEnv">
+          <option value="testnet">Testnet (fake funds — start here)</option>
+          <option value="live">Live account (real money)</option>
+        </select>
+        <label>Relay address (Termux)</label>
+        <input id="bnRelayUrl" value="http://localhost:8788">
+        <button class="btn-primary" id="bnBtnConnect">CONNECT</button>
+        <div class="warn-box" id="bnLiveWarnBox" hidden>
+          You selected LIVE. Real orders will only be sent if you separately arm live execution on the dashboard.
+        </div>
+        <button class="btn-ghost" style="width:100%; margin-top:10px;" onclick="backToBrokerSelect()">‹ Choose a different broker</button>
+      </div>
+      <div class="panel">
+        <h2>Setup steps</h2>
+        <p class="small">
+          1. Open <a href="https://testnet.binance.vision/" target="_blank">testnet.binance.vision</a>, log in with GitHub, generate an HMAC API key — instant, no approval, use this to try everything risk-free first.<br>
+          2. For real trading later: on the real Binance app/site go to <b>Profile → API Management → Create API</b>, enable "Enable Spot Trading" only (leave withdrawals off), and restrict it if you can. Binance requires standard account KYC for live trading, separate from this API step.<br>
+          3. Paste the API Key and Secret above.<br>
+          4. Download <code>binance_relay.py</code> (link provided separately), run <code>python3 binance_relay.py</code> in Termux in this project's folder, and open this page through <b>http://localhost:8788/index.html</b> (not the https GitHub link) whenever you want real orders to actually go through — the relay only works when the page and script are on the same device.<br>
+          5. Tap Connect. Start on Testnet.
         </p>
       </div>
     </section>
@@ -191,13 +239,15 @@ a{color:var(--cyan);}
       <div class="panel">
         <h2>Trade size &amp; protection</h2>
         <div class="row">
-          <div><label>Volume (× broker min)</label><input id="inVolMult" type="number" min="1" value="1"></div>
-          <div><label>SL distance (price units)</label><input id="inSL" type="number" step="0.0001" value="0.002"></div>
+          <div><label id="volLabel">Volume (× broker min)</label><input id="inVolMult" type="number" min="1" value="1"></div>
+          <div id="slWrap"><label>SL distance (price units)</label><input id="inSL" type="number" step="0.0001" value="0.002"></div>
         </div>
         <div class="row">
-          <div><label>TP distance (price units)</label><input id="inTP" type="number" step="0.0001" value="0.004"></div>
+          <div id="tpWrap"><label>TP distance (price units)</label><input id="inTP" type="number" step="0.0001" value="0.004"></div>
           <div><label>Min score to trade</label><input id="inMinScore" type="number" min="0" max="100" value="70"></div>
         </div>
+        <p class="small" id="bnAmountHint" hidden></p>
+        <p class="small" id="bnNoSlTpNote" hidden>Binance BUY/SELL here are plain market orders — no automatic stop loss/take profit yet. Close manually or via the signal reversing.</p>
         <div class="row" style="margin-top:14px;">
           <button class="btn-buy" onclick="manualTrade('BUY')">BUY</button>
           <button class="btn-sell" onclick="manualTrade('SELL')">SELL</button>
@@ -259,6 +309,7 @@ const CANDIDATES = [
 ];
 
 let state = {
+  broker:'ctrader',
   clientId:'', clientSecret:'', accessToken:'', refreshToken:'',
   env:'demo', accountId:null, moneyDigits:2,
   connected:false, accountReady:false,
@@ -266,12 +317,34 @@ let state = {
   wins:0, losses:0, balance:0, equity:0
 };
 
+const BINANCE_CANDIDATES = [
+  {symbol:'BTCUSDT', key:'BTCUSDT', label:'BTC/USDT', name:'Bitcoin', bot:'BTCBOT', defSL:60, defTP:120},
+  {symbol:'ETHUSDT', key:'ETHUSDT', label:'ETH/USDT', name:'Ethereum', bot:'ETHBOT', defSL:5, defTP:10},
+  {symbol:'SOLUSDT', key:'SOLUSDT', label:'SOL/USDT', name:'Solana', bot:'SOLBOT', defSL:0.4, defTP:0.8},
+  {symbol:'BNBUSDT', key:'BNBUSDT', label:'BNB/USDT', name:'BNB', bot:'BNBBOT', defSL:1, defTP:2},
+  {symbol:'XRPUSDT', key:'XRPUSDT', label:'XRP/USDT', name:'Ripple', bot:'XRPBOT', defSL:0.01, defTP:0.02},
+  {symbol:'DOGEUSDT', key:'DOGEUSDT', label:'DOGE/USDT', name:'Dogecoin', bot:'DOGEBOT', defSL:0.002, defTP:0.004},
+];
+
 let ws=null, msgSeq=0, hbTimer=null;
 let symbolsByNorm = {};   // normalized name -> {symbolId, symbolName}
 let assets = {};          // key -> asset state object
 let currentAsset = null;
+let bnSockets = {};       // key -> WebSocket for Binance market stream
 
 const $ = id => document.getElementById(id);
+
+function chooseBroker(broker){
+  state.broker = broker;
+  $('brokerSelect').hidden = true;
+  if(broker === 'ctrader'){ $('setupPanel').hidden = false; }
+  else { $('setupPanelBinance').hidden = false; }
+}
+function backToBrokerSelect(){
+  $('setupPanel').hidden = true;
+  $('setupPanelBinance').hidden = true;
+  $('brokerSelect').hidden = false;
+}
 
 function log(msg, target){
   const t = new Date().toLocaleTimeString();
@@ -299,6 +372,248 @@ $('btnConnect').onclick = () => {
   connect();
 };
 $('inEnv').onchange = () => { $('liveWarnBox').hidden = $('inEnv').value !== 'live'; };
+
+/* ---------------- cTrader OAuth login (real authorize flow, no approval needed) ---------------- */
+
+const REDIRECT_URI = location.origin + location.pathname; // must exactly match what's registered in the app
+
+$('btnAuthorize').onclick = () => {
+  const clientId = $('inClientId').value.trim();
+  if(!clientId){ alert('Enter your Client ID first — copy it from openapi.ctrader.com/apps.'); return; }
+  localStorage.setItem('morganai_clientId', clientId);
+  localStorage.setItem('morganai_clientSecret', $('inClientSecret').value.trim());
+  const url = 'https://connect.spotware.com/apps/auth'
+    + '?client_id=' + encodeURIComponent(clientId)
+    + '&redirect_uri=' + encodeURIComponent(REDIRECT_URI)
+    + '&scope=trading';
+  location.href = url;
+};
+
+function handleOAuthRedirect(){
+  const params = new URLSearchParams(location.search);
+  const code = params.get('code');
+  if(!code) return;
+
+  // restore what we saved before leaving for the login screen
+  const savedId = localStorage.getItem('morganai_clientId') || '';
+  const savedSecret = localStorage.getItem('morganai_clientSecret') || '';
+  if(savedId) $('inClientId').value = savedId;
+  if(savedSecret) $('inClientSecret').value = savedSecret;
+
+  const box = $('authCodeBox');
+  box.innerHTML = 'Authorization received. Exchanging it for a token...';
+
+  const tokenUrl = 'https://connect.spotware.com/apps/token'
+    + '?grant_type=authorization_code'
+    + '&code=' + encodeURIComponent(code)
+    + '&redirect_uri=' + encodeURIComponent(REDIRECT_URI)
+    + '&client_id=' + encodeURIComponent(savedId)
+    + '&client_secret=' + encodeURIComponent(savedSecret);
+
+  fetch(tokenUrl).then(r => r.json()).then(data => {
+    if(data.accessToken || data.access_token){
+      $('inAccessToken').value = data.accessToken || data.access_token;
+      if(data.refreshToken || data.refresh_token) $('inRefreshToken').value = data.refreshToken || data.refresh_token;
+      box.innerHTML = '<span style="color:var(--green)">Token received and filled in below. Tap CONNECT.</span>';
+    } else {
+      showManualExchange(code, savedId, savedSecret, box, JSON.stringify(data));
+    }
+  }).catch(() => {
+    showManualExchange(code, savedId, savedSecret, box, 'browser could not reach cTrader directly (CORS)');
+  });
+
+  // clean the ?code= off the URL so a refresh doesn't re-trigger this
+  history.replaceState({}, '', REDIRECT_URI);
+}
+
+function showManualExchange(code, clientId, clientSecret, box, reason){
+  const cmd = 'curl "https://connect.spotware.com/apps/token?grant_type=authorization_code&code='
+    + code + '&redirect_uri=' + encodeURIComponent(REDIRECT_URI)
+    + '&client_id=' + clientId + '&client_secret=' + clientSecret + '"';
+  box.innerHTML = 'Automatic exchange didn\'t work (' + escapeHtml(reason) + '). Run this in Termux instead, then paste the "accessToken" value from the reply into the Access Token field above:'
+    + '<div class="logs" style="height:auto; margin-top:6px; user-select:all;">' + escapeHtml(cmd) + '</div>';
+}
+handleOAuthRedirect();
+
+/* ============================================================
+   BINANCE — crypto-only path. Prices stream direct to browser.
+   Orders route through a local Termux relay (Binance blocks
+   signed order calls from browser origins).
+   ============================================================ */
+
+$('bnEnv').onchange = () => { $('bnLiveWarnBox').hidden = $('bnEnv').value !== 'live'; };
+
+$('bnBtnConnect').onclick = () => {
+  state.bnApiKey = $('bnApiKey').value.trim();
+  state.bnApiSecret = $('bnApiSecret').value.trim();
+  state.bnEnv = $('bnEnv').value;
+  state.bnRelayUrl = $('bnRelayUrl').value.trim().replace(/\/$/, '');
+  if(!state.bnApiKey || !state.bnApiSecret){ alert('API Key and Secret are both required.'); return; }
+  bnConnect();
+};
+
+async function bnConnect(){
+  setBadge('CONNECTING...', 'off');
+  try{
+    const acct = await bnRelayCall('/api/binance/account', {});
+    if(acct.error){ alert('Could not reach your account: ' + acct.error); setBadge('CONNECTION ERROR','off'); return; }
+    state.accountReady = true;
+    state.moneyDigits = 2;
+    bnApplyAccount(acct);
+    setBadge(state.bnEnv === 'live' ? 'BINANCE LIVE · CONNECTED' : 'BINANCE TESTNET · CONNECTED', state.bnEnv === 'live' ? 'live' : 'demo');
+    bnIndexSymbols();
+    showDashboard();
+  } catch(e){
+    setBadge('CONNECTION ERROR', 'off');
+    alert('Could not reach the relay at ' + state.bnRelayUrl + '. Is binance_relay.py running in Termux, and are you opening this page from http://localhost:8788 (not the https link)? Balance/price viewing still needs the relay reachable at least once to confirm your keys.');
+  }
+}
+
+async function bnRelayCall(path, body){
+  const res = await fetch(state.bnRelayUrl + path, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(Object.assign({apiKey: state.bnApiKey, apiSecret: state.bnApiSecret, testnet: state.bnEnv !== 'live'}, body))
+  });
+  return res.json();
+}
+
+function bnApplyAccount(acct){
+  const usdt = (acct.balances || []).find(b => b.asset === 'USDT');
+  state.balance = usdt ? parseFloat(usdt.free) + parseFloat(usdt.locked) : 0;
+  $('stBalance').textContent = '$' + state.balance.toFixed(2);
+  refreshEquity();
+}
+
+function bnIndexSymbols(){
+  const grid = $('assetGrid');
+  grid.innerHTML = '';
+  BINANCE_CANDIDATES.forEach(async c => {
+    assets[c.key] = {
+      key:c.key, label:c.label, name:c.name, bot:c.bot, defSL:c.defSL, defTP:c.defTP,
+      symbol:c.symbol, full:null, lastPrice:null,
+      closes:[], emaFast:null, emaSlow:null, position:null
+    };
+    const card = document.createElement('div');
+    card.className = 'assetcard';
+    card.id = 'card_'+c.key;
+    card.onclick = () => openBot(c.key);
+    card.innerHTML = '<b>'+c.label+'</b><small>'+c.name+' · '+c.bot+'</small><div class="price" id="price_'+c.key+'">—</div>';
+    grid.appendChild(card);
+    bnSubscribe(assets[c.key]);
+    bnFetchFilters(assets[c.key]);
+  });
+  $('symStatus').textContent = BINANCE_CANDIDATES.length + ' crypto pairs streaming live from Binance.';
+}
+
+async function bnFetchFilters(a){
+  try{
+    const info = await bnRelayCall('/api/binance/exchangeInfo', {symbol: a.symbol});
+    const sym = info.symbols && info.symbols[0];
+    if(!sym) return;
+    const lot = sym.filters.find(f => f.filterType === 'LOT_SIZE');
+    const notional = sym.filters.find(f => f.filterType === 'NOTIONAL' || f.filterType === 'MIN_NOTIONAL');
+    a.full = {
+      minQty: lot ? parseFloat(lot.minQty) : 0.0001,
+      stepSize: lot ? parseFloat(lot.stepSize) : 0.0001,
+      minNotional: notional ? parseFloat(notional.minNotional) : 5
+    };
+    if(currentAsset === a.key) updateBnAmountHint(a);
+  } catch(e){ /* keep defaults, order attempt will still surface a clear error */ }
+}
+
+function updateBnAmountHint(a){
+  const el = $('bnAmountHint');
+  if(!el) return;
+  const min = a.full ? a.full.minNotional : 5;
+  el.textContent = 'This pair\'s real minimum on Binance is $' + min.toFixed(2) + ' per order — amounts below that are automatically raised to it.';
+}
+
+function bnSubscribe(a){
+  const host = state.bnEnv === 'live' ? 'wss://stream.binance.com:9443' : 'wss://testnet.binance.vision';
+  const stream = a.symbol.toLowerCase() + '@bookTicker';
+  const sock = new WebSocket(host + '/ws/' + stream);
+  sock.onmessage = (ev) => {
+    let msg; try{ msg = JSON.parse(ev.data); } catch(e){ return; }
+    const bid = parseFloat(msg.b), ask = parseFloat(msg.a);
+    if(!bid || !ask) return;
+    const mid = (bid+ask)/2;
+    a.lastPrice = mid;
+    const pc = $('price_'+a.key); if(pc) pc.textContent = mid.toFixed(mid < 1 ? 6 : (mid < 100 ? 4 : 2));
+    a.closes.push(mid);
+    if(a.closes.length > 400) a.closes.shift();
+    updateIndicators(a, true); // faster-tuned periods for crypto
+    if(a.position) updateFloatingPnL(a);
+    if(currentAsset === a.key) renderBotView(a);
+    maybeAutoTrade(a);
+  };
+  sock.onerror = () => { log('Price stream error for '+a.label+'.'); };
+  bnSockets[a.key] = sock;
+}
+
+function bnRoundQty(qty, step){
+  if(!step) return qty;
+  const precision = Math.max(0, Math.round(-Math.log10(step)));
+  return Math.floor(qty / step) * step > 0 ? +(Math.floor(qty/step)*step).toFixed(precision) : 0;
+}
+
+async function bnExecuteTrade(a, side){
+  if(!a.lastPrice){ log('No live price yet for '+a.label+'.'); return; }
+  if(!a.full){ log('Still loading '+a.label+'\'s trading rules from Binance — try again in a moment.'); return; }
+
+  let amountUsdt = parseFloat($('inVolMult').value) || 1;
+  const minNotional = a.full.minNotional || 5;
+  if(amountUsdt < minNotional){
+    log('$'+amountUsdt.toFixed(2)+' is below Binance\'s real minimum for '+a.label+' ($'+minNotional.toFixed(2)+'). Using $'+minNotional.toFixed(2)+' instead.');
+    amountUsdt = minNotional;
+  }
+  let quantity = bnRoundQty(amountUsdt / a.lastPrice, a.full.stepSize);
+  if(quantity < a.full.minQty) quantity = bnRoundQty(a.full.minQty, a.full.stepSize) || a.full.minQty;
+  if(!quantity){ log('Could not size a valid order for '+a.label+'.'); return; }
+
+  if(!canSendRealOrders()){
+    a.position = {side, entryPrice:a.lastPrice, volume:quantity, paper:true, floatingPnL:0};
+    log('[PAPER] '+side+' '+a.label+' ~$'+(quantity*a.lastPrice).toFixed(2)+' (qty '+quantity+') @ '+a.lastPrice);
+    renderBotView(a);
+    return;
+  }
+
+  log('Sending '+side+' order for '+a.label+' (~$'+(quantity*a.lastPrice).toFixed(2)+') to relay...');
+  try{
+    const res = await bnRelayCall('/api/binance/order', {symbol:a.symbol, side, quantity});
+    if(res.error){ log('ORDER ERROR: ' + res.error); return; }
+    log('FILLED '+side+' '+a.label+' qty='+res.executedQty+' avg price ~'+(res.cummulativeQuoteQty/res.executedQty).toFixed(4));
+    if(side === 'BUY'){
+      a.position = {side:'BUY', entryPrice: res.cummulativeQuoteQty/res.executedQty, volume: parseFloat(res.executedQty), floatingPnL:0};
+    } else if(a.position){
+      const proceeds = parseFloat(res.cummulativeQuoteQty);
+      const cost = a.position.entryPrice * a.position.volume;
+      const gp = proceeds - cost;
+      log('Position closed. Realized P&L: '+(gp>=0?'+':'')+gp.toFixed(2));
+      recordResult(gp>=0);
+      a.position = null;
+    }
+    const acct = await bnRelayCall('/api/binance/account', {});
+    if(!acct.error) bnApplyAccount(acct);
+    renderBotView(a);
+  } catch(e){
+    log('ORDER FAILED: could not reach relay. Open this page via http://localhost:8788 with binance_relay.py running.');
+  }
+}
+
+function bnCloseCurrentPosition(){
+  const a = assets[currentAsset];
+  if(!a || !a.position) return;
+  if(a.position.paper){
+    log('[PAPER] Closed '+a.position.side+' '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
+    recordResult((a.position.floatingPnL||0)>=0);
+    a.position = null;
+    renderBotView(a);
+    return;
+  }
+  bnExecuteTrade(a, 'SELL');
+}
+
 
 function connect(){
   const host = state.env === 'live' ? 'wss://live.ctraderapi.com:5036' : 'wss://demo.ctraderapi.com:5036';
@@ -476,12 +791,13 @@ function ema(prev, price, period){
   return prev==null ? price : price*k + prev*(1-k);
 }
 
-function updateIndicators(a){
-  a.emaFast = ema(a.emaFast, a.lastPrice, 9);
-  a.emaSlow = ema(a.emaSlow, a.lastPrice, 21);
+function updateIndicators(a, fast){
+  const pFast = fast ? 5 : 9, pSlow = fast ? 13 : 21, pRsi = fast ? 8 : 14, pMom = fast ? 5 : 10, pStruct = fast ? 12 : 20;
+  a.emaFast = ema(a.emaFast, a.lastPrice, pFast);
+  a.emaSlow = ema(a.emaSlow, a.lastPrice, pSlow);
 
   const n = a.closes.length;
-  const win = 14;
+  const win = pRsi;
   if(n > win){
     let gains=0, losses=0;
     for(let i=n-win; i<n; i++){
@@ -492,16 +808,16 @@ function updateIndicators(a){
     a.rsi = avgL===0 ? 100 : 100 - (100/(1+ (avgG/avgL)));
   } else a.rsi = null;
 
-  if(n > 10){
-    const back = a.closes[n-11];
+  if(n > pMom){
+    const back = a.closes[n-1-pMom];
     a.momentum = back ? ((a.lastPrice-back)/back)*100 : 0;
   } else a.momentum = null;
 
-  if(n > 20){
-    const seg = a.closes.slice(n-20);
+  if(n > pStruct){
+    const seg = a.closes.slice(n-pStruct);
     let sum=0; for(let i=1;i<seg.length;i++) sum += Math.abs(seg[i]-seg[i-1]);
     a.volatility = sum/seg.length;
-    const seg2 = a.closes.slice(n-40, n-20);
+    const seg2 = a.closes.slice(n-pStruct*2, n-pStruct);
     if(seg2.length>1){
       let sum2=0; for(let i=1;i<seg2.length;i++) sum2 += Math.abs(seg2[i]-seg2[i-1]);
       a.volAvg = sum2/seg2.length;
@@ -572,6 +888,17 @@ function openBot(key){
   $('botSubtitle').textContent = a.label + ' · ' + a.name;
   $('inSL').value = a.defSL;
   $('inTP').value = a.defTP;
+  const isBn = state.broker === 'binance';
+  $('slWrap').hidden = isBn; $('tpWrap').hidden = isBn; $('bnNoSlTpNote').hidden = !isBn;
+  $('bnAmountHint').hidden = !isBn;
+  if(isBn){
+    $('volLabel').textContent = 'Trade amount (USDT)';
+    $('inVolMult').value = a.full ? Math.max(1, a.full.minNotional) : 5;
+    if(a.full) updateBnAmountHint(a); else $('bnAmountHint').textContent = 'Loading this pair\'s real Binance minimum...';
+  } else {
+    $('volLabel').textContent = 'Volume (× broker min)';
+    $('inVolMult').value = 1;
+  }
   $('dashboard').hidden = true;
   $('botView').hidden = false;
   $('botLogs').innerHTML = '';
@@ -620,22 +947,20 @@ function renderBotView(a){
 /* ---------------- Trading ---------------- */
 
 function toggleSwitch(which){
+  const isLive = state.broker === 'binance' ? state.bnEnv === 'live' : state.env === 'live';
   if(which==='paper'){
     state.paper = !state.paper;
     $('swPaper').classList.toggle('on', state.paper);
     if(state.paper){ state.armed=false; $('swArm').classList.remove('on','armed'); }
   } else if(which==='arm'){
     if(state.paper){ alert('Turn Paper mode OFF first — arming only matters for real orders.'); return; }
-    if(state.env!=='live' && !state.armed){
-      // arming allowed on demo too (sends real demo orders), just skip the extra confirm
-    }
-    if(!state.armed && state.env==='live'){
-      if(!confirm('This will allow REAL MONEY orders to be sent to your live cTrader account. Continue?')) return;
+    if(!state.armed && isLive){
+      if(!confirm('This will allow REAL MONEY orders to be sent to your live account. Continue?')) return;
     }
     state.armed = !state.armed;
     const el = $('swArm');
     el.classList.toggle('on', state.armed);
-    el.classList.toggle('armed', state.armed && state.env==='live');
+    el.classList.toggle('armed', state.armed && isLive);
   } else if(which==='auto'){
     state.auto = !state.auto;
     $('swAuto').classList.toggle('on', state.auto);
@@ -643,6 +968,7 @@ function toggleSwitch(which){
 }
 
 function canSendRealOrders(){
+  if(state.broker === 'binance') return !state.paper && (state.bnEnv==='testnet' || (state.bnEnv==='live' && state.armed));
   return !state.paper && (state.env==='demo' || (state.env==='live' && state.armed));
 }
 
@@ -652,16 +978,19 @@ function maybeAutoTrade(a){
   const sig = a.lastSignal;
   const minScore = parseInt($('inMinScore') ? $('inMinScore').value : 70) || 70;
   if(sig.direction!=='WAIT' && sig.score >= minScore){
-    executeTrade(a, sig.direction);
+    if(state.broker === 'binance') bnExecuteTrade(a, sig.direction);
+    else ctExecuteTrade(a, sig.direction);
   }
 }
 
 function manualTrade(side){
   if(!currentAsset) return;
-  executeTrade(assets[currentAsset], side);
+  const a = assets[currentAsset];
+  if(state.broker === 'binance'){ bnExecuteTrade(a, side); }
+  else { ctExecuteTrade(a, side); }
 }
 
-function executeTrade(a, side){
+function ctExecuteTrade(a, side){
   if(!a.lastPrice){ log('No live price yet for '+a.label+'.'); return; }
   if(a.position){ log('Already in a position on '+a.label+' — close it first.'); return; }
 
@@ -700,6 +1029,7 @@ function closeCurrentPosition(){
   if(!currentAsset) return;
   const a = assets[currentAsset];
   if(!a.position) return;
+  if(state.broker === 'binance'){ bnCloseCurrentPosition(); return; }
   if(a.position.paper){
     log('[PAPER] Closed '+a.position.side+' '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
     if((a.position.floatingPnL||0)>=0) recordResult(true); else recordResult(false);

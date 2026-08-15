@@ -49,6 +49,22 @@ That's the whole path: no Java, no Android Studio, no keystore to manage yoursel
 (PWABuilder generates and stores one for you — download it from the same page if you
 ever need to sign an update the same way).
 
+## Running the Binance relay (only needed for real Binance orders)
+
+If you're using the Binance broker option, prices work fine over the normal GitHub
+Pages link. But placing real orders needs `binance_relay.py` running on your phone:
+
+```bash
+cd ~/morgan-ctrader
+python3 binance_relay.py
+```
+
+Leave that running, then open **http://localhost:8788/index.html** in your browser
+(not the `https://...github.io` link) whenever you want real orders to go through —
+Binance blocks browsers from placing signed orders directly, so the relay has to sit
+between the page and Binance, and that only works when both are on the same device.
+Paper mode and price-watching work fine either way you open it.
+
 ## Re-deploying after changes
 
 Any time you edit `index.html` (new strategy tweaks, etc.):
