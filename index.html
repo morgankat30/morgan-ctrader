@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#050807">
+<title>Morgan AI Trading Engine</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#050807; --panel:#0b1310; --panel2:#0f1a16; --line:#1b2a24;
+  --cyan:#22d3ee; --gold:#f2c94c; --green:#33ffb0; --red:#ff5470;
+  --txt:#d8f5ea; --dim:#6f8f83;
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+body{margin:0; background:var(--bg); color:var(--txt); font-family:'Rajdhani',sans-serif; font-size:15px;}
+h1,h2,h3,.brand,.mono-title{font-family:'Orbitron',sans-serif;}
+#app{max-width:520px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column;}
+header{display:flex; align-items:center; justify-content:space-between; padding:14px 16px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:5;}
+.brand{font-size:18px; font-weight:800; color:var(--cyan); letter-spacing:1px;}
+.brand span{color:var(--gold);}
+.envBadge{font-size:11px; padding:4px 10px; border-radius:20px; border:1px solid var(--line); letter-spacing:1px;}
+.envBadge.live{color:var(--red); border-color:var(--red); background:rgba(255,84,112,.08);}
+.envBadge.demo{color:var(--gold); border-color:var(--gold); background:rgba(242,201,76,.08);}
+.envBadge.off{color:var(--dim);}
+main{flex:1; padding:14px 16px 90px;}
+.panel{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px;}
+.panel h2{margin:0 0 10px; font-size:13px; letter-spacing:2px; color:var(--cyan); text-transform:uppercase;}
+label{display:block; font-size:12px; color:var(--dim); margin:10px 0 4px; letter-spacing:.5px;}
+input,select{width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--txt); padding:10px 12px; border-radius:8px; font-family:'Rajdhani',sans-serif; font-size:15px;}
+input:focus,select:focus{outline:1px solid var(--cyan);}
+.row{display:flex; gap:10px;}
+.row > *{flex:1;}
+button{font-family:'Rajdhani',sans-serif; font-weight:700; letter-spacing:.5px; border:none; border-radius:9px; padding:12px 14px; cursor:pointer; font-size:14px;}
+.btn-primary{background:linear-gradient(135deg,var(--cyan),#0891b2); color:#00201c; width:100%; margin-top:14px;}
+.btn-ghost{background:transparent; border:1px solid var(--line); color:var(--txt);}
+.btn-buy{background:var(--green); color:#00281c;}
+.btn-sell{background:var(--red); color:#2a0010;}
+.btn-danger{background:transparent; border:1px solid var(--red); color:var(--red);}
+.btn-warn{background:transparent; border:1px solid var(--gold); color:var(--gold);}
+.small{font-size:11px; color:var(--dim); line-height:1.5;}
+.warn-box{border:1px solid var(--gold); background:rgba(242,201,76,.06); border-radius:10px; padding:10px 12px; font-size:12px; color:var(--gold); margin-top:10px; line-height:1.5;}
+.danger-box{border:1px solid var(--red); background:rgba(255,84,112,.06); border-radius:10px; padding:10px 12px; font-size:12px; color:var(--red); margin-top:10px; line-height:1.5;}
+.statgrid{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+.stat{background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:12px;}
+.stat .lbl{font-size:11px; color:var(--dim); letter-spacing:1px;}
+.stat .val{font-size:22px; font-weight:700; margin-top:4px;}
+.pos{color:var(--green);} .neg{color:var(--red);}
+.assetgrid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px;}
+.assetcard{background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:12px; cursor:pointer;}
+.assetcard.active{border-color:var(--cyan);}
+.assetcard b{font-size:15px;}
+.assetcard small{display:block; color:var(--dim); margin-top:3px; font-size:11px;}
+.assetcard .price{margin-top:6px; font-family:'Orbitron',sans-serif; font-size:13px; color:var(--cyan);}
+.toggle{display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--line);}
+.toggle:last-child{border-bottom:none;}
+.switch{position:relative; width:44px; height:24px; background:var(--panel2); border:1px solid var(--line); border-radius:20px; cursor:pointer;}
+.switch.on{background:rgba(51,255,176,.25); border-color:var(--green);}
+.switch.on.armed{background:rgba(255,84,112,.25); border-color:var(--red);}
+.switch::after{content:''; position:absolute; width:18px; height:18px; background:var(--txt); border-radius:50%; top:2px; left:2px; transition:.15s;}
+.switch.on::after{left:22px; background:var(--green);}
+.switch.on.armed::after{background:var(--red);}
+.backbar{display:flex; align-items:center; gap:10px; margin-bottom:12px;}
+.backbar button{padding:8px 12px;}
+.signalbig{text-align:center; padding:18px 0;}
+.signalbig .sig{font-family:'Orbitron',sans-serif; font-size:38px; font-weight:800;}
+.sig.BUY{color:var(--green);} .sig.SELL{color:var(--red);} .sig.WAIT{color:var(--dim);}
+.confbar{height:8px; background:var(--panel2); border-radius:6px; overflow:hidden; margin-top:10px;}
+.confbar > div{height:100%; background:linear-gradient(90deg,var(--gold),var(--green));}
+.checks{margin-top:12px;}
+.check{display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px solid var(--line); font-size:13px;}
+.check:last-child{border-bottom:none;}
+.check .tag{font-weight:700; font-size:12px;}
+.tag.BUY,.tag.PASS{color:var(--green);} .tag.SELL{color:var(--red);} .tag.WEAK,.tag.WAIT,.tag.RANGE{color:var(--gold);} .tag.HIGH{color:var(--red);}
+.logs{background:#020504; border:1px solid var(--line); border-radius:10px; padding:10px; height:200px; overflow-y:auto; font-size:12px; font-family:monospace; color:#7feccb;}
+.logs div{margin-bottom:4px; opacity:.9;}
+.logs .t{color:var(--dim); margin-right:6px;}
+.posbox{border:1px solid var(--cyan); border-radius:10px; padding:12px; margin-top:12px; background:rgba(34,211,238,.05);}
+footer.tabs{position:fixed; bottom:0; left:0; right:0; background:var(--panel); border-top:1px solid var(--line); display:flex; max-width:520px; margin:0 auto;}
+footer.tabs button{flex:1; background:none; border:none; color:var(--dim); padding:12px 0; font-size:12px; border-radius:0;}
+footer.tabs button.active{color:var(--cyan);}
+hidden{display:none !important;}
+[hidden]{display:none !important;}
+a{color:var(--cyan);}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">MORGAN <span>AI</span></div>
+    <div id="envBadge" class="envBadge off">NOT CONNECTED</div>
+  </header>
+
+  <main>
+
+    <!-- SETUP -->
+    <section id="setupPanel">
+      <div class="panel">
+        <h2>Connect cTrader Open API</h2>
+        <p class="small">This connects to your real cTrader Open API application and a real trading account (demo or live). Nothing is sent to any third-party wallet — only to cTrader's own servers.</p>
+        <label>Client ID</label>
+        <input id="inClientId" placeholder="Application Client ID">
+        <label>Client Secret</label>
+        <input id="inClientSecret" type="password" placeholder="Application Client Secret">
+        <label>Access Token</label>
+        <input id="inAccessToken" type="password" placeholder="Access Token (from Playground or OAuth)">
+        <label>Refresh Token (optional)</label>
+        <input id="inRefreshToken" type="password" placeholder="Refresh Token">
+        <label>Environment</label>
+        <select id="inEnv">
+          <option value="demo">Demo account (paper money — start here)</option>
+          <option value="live">Live account (real money)</option>
+        </select>
+        <button class="btn-primary" id="btnConnect">CONNECT</button>
+        <div class="warn-box" id="liveWarnBox" hidden>
+          You selected LIVE. This will authorize against your real cTrader account. Trades will only be sent if you separately arm live execution on the dashboard — connecting alone does not place any trade.
+        </div>
+        <p class="small" style="margin-top:12px;">Don't have a Client ID/Secret/Access Token yet? See the setup steps at the bottom of this page.</p>
+      </div>
+      <div class="panel">
+        <h2>Setup steps</h2>
+        <p class="small">
+          1. Register a broker account that supports cTrader (link provided separately).<br>
+          2. Go to <a href="https://openapi.ctrader.com/apps" target="_blank">openapi.ctrader.com/apps</a> and log in with your cTrader ID.<br>
+          3. Create a new application (any name/description) and wait for approval.<br>
+          4. Open the app's <b>Playground</b> button — pick "trading" scope — and click "Get token". This gives you an Access Token + Refresh Token for your own account without building OAuth screens.<br>
+          5. Paste the Client ID, Client Secret and Access Token above. Start on Demo.
+        </p>
+      </div>
+    </section>
+
+    <!-- DASHBOARD -->
+    <section id="dashboard" hidden>
+      <div class="panel">
+        <h2>Account</h2>
+        <div class="statgrid">
+          <div class="stat"><div class="lbl">BALANCE</div><div class="val" id="stBalance">$0.00</div></div>
+          <div class="stat"><div class="lbl">EQUITY</div><div class="val" id="stEquity">$0.00</div></div>
+          <div class="stat"><div class="lbl">WINS</div><div class="val pos" id="stWins">0</div></div>
+          <div class="stat"><div class="lbl">LOSSES</div><div class="val neg" id="stLosses">0</div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Execution mode</h2>
+        <div class="toggle">
+          <div><b>Paper mode</b><div class="small">Signals run for real, trades are simulated locally. No orders sent.</div></div>
+          <div class="switch on" id="swPaper" onclick="toggleSwitch('paper')"></div>
+        </div>
+        <div class="toggle">
+          <div><b>Arm live execution</b><div class="small">Required (in addition to Paper OFF) before any real order is sent.</div></div>
+          <div class="switch" id="swArm" onclick="toggleSwitch('arm')"></div>
+        </div>
+        <div class="toggle">
+          <div><b>Auto-execute on signal</b><div class="small">If off, you tap BUY/SELL yourself after reviewing the signal.</div></div>
+          <div class="switch" id="swAuto" onclick="toggleSwitch('auto')"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Trading assets</h2>
+        <p class="small" id="symStatus">Loading symbols from your broker...</p>
+        <div class="assetgrid" id="assetGrid"></div>
+      </div>
+    </section>
+
+    <!-- BOT DETAIL -->
+    <section id="botView" hidden>
+      <div class="backbar">
+        <button class="btn-ghost" onclick="showDashboard()">‹ Back</button>
+        <div>
+          <b id="botTitle">—</b>
+          <div class="small" id="botSubtitle">—</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="signalbig">
+          <div class="sig WAIT" id="sigText">WAIT</div>
+          <div class="small" id="sigPrice">price —</div>
+          <div class="confbar"><div id="confFill" style="width:0%"></div></div>
+          <div class="small" id="confText">confirmation score —</div>
+        </div>
+        <div class="checks" id="checksList"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Trade size &amp; protection</h2>
+        <div class="row">
+          <div><label>Volume (× broker min)</label><input id="inVolMult" type="number" min="1" value="1"></div>
+          <div><label>SL distance (price units)</label><input id="inSL" type="number" step="0.0001" value="0.002"></div>
+        </div>
+        <div class="row">
+          <div><label>TP distance (price units)</label><input id="inTP" type="number" step="0.0001" value="0.004"></div>
+          <div><label>Min score to trade</label><input id="inMinScore" type="number" min="0" max="100" value="70"></div>
+        </div>
+        <div class="row" style="margin-top:14px;">
+          <button class="btn-buy" onclick="manualTrade('BUY')">BUY</button>
+          <button class="btn-sell" onclick="manualTrade('SELL')">SELL</button>
+        </div>
+      </div>
+
+      <div class="panel" id="positionPanel" hidden>
+        <h2>Open position</h2>
+        <div class="posbox" id="positionBox"></div>
+        <button class="btn-danger" style="width:100%; margin-top:10px;" onclick="closeCurrentPosition()">CLOSE POSITION</button>
+      </div>
+
+      <div class="panel">
+        <h2>Live execution log</h2>
+        <div class="logs" id="botLogs"></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+/* ============================================================
+   MORGAN AI TRADING ENGINE — cTrader Open API (JSON/WebSocket)
+   Real market data, real signal engine, real order execution.
+   ============================================================ */
+
+const PT = {
+  APP_AUTH_REQ:2100, APP_AUTH_RES:2101,
+  ACC_AUTH_REQ:2102, ACC_AUTH_RES:2103,
+  NEW_ORDER_REQ:2106,
+  CLOSE_POSITION_REQ:2111,
+  SYMBOLS_LIST_REQ:2114, SYMBOLS_LIST_RES:2115,
+  SYMBOL_BY_ID_REQ:2116, SYMBOL_BY_ID_RES:2117,
+  TRADER_REQ:2121, TRADER_RES:2122,
+  RECONCILE_REQ:2124, RECONCILE_RES:2125,
+  EXECUTION_EVENT:2126,
+  SUBSCRIBE_SPOTS_REQ:2127, SUBSCRIBE_SPOTS_RES:2128,
+  UNSUBSCRIBE_SPOTS_REQ:2129,
+  SPOT_EVENT:2131,
+  ORDER_ERROR_EVENT:2132,
+  ERROR_RES:2142,
+  GET_ACCOUNTS_REQ:2149, GET_ACCOUNTS_RES:2150,
+  HEARTBEAT:51
+};
+
+// Candidate instruments to look for on whatever broker/account connects.
+// Only ones actually found in the account's symbol list are shown.
+const CANDIDATES = [
+  {match:['BTCUSD','BTC/USD','BTCUSD.'], key:'BTCUSD', label:'BTC/USD', name:'Bitcoin', bot:'BTCBOT', defSL:60, defTP:120},
+  {match:['ETHUSD','ETH/USD'], key:'ETHUSD', label:'ETH/USD', name:'Ethereum', bot:'ETHBOT', defSL:5, defTP:10},
+  {match:['LTCUSD','LTC/USD'], key:'LTCUSD', label:'LTC/USD', name:'Litecoin', bot:'LTCBOT', defSL:1, defTP:2},
+  {match:['XRPUSD','XRP/USD'], key:'XRPUSD', label:'XRP/USD', name:'Ripple', bot:'XRPBOT', defSL:0.01, defTP:0.02},
+  {match:['EURUSD','EUR/USD'], key:'EURUSD', label:'EUR/USD', name:'Euro', bot:'EURBOT', defSL:0.0015, defTP:0.003},
+  {match:['GBPUSD','GBP/USD'], key:'GBPUSD', label:'GBP/USD', name:'Pound', bot:'GBPBOT', defSL:0.0018, defTP:0.0036},
+  {match:['USDJPY','USD/JPY'], key:'USDJPY', label:'USD/JPY', name:'Yen', bot:'JPYBOT', defSL:0.15, defTP:0.3},
+  {match:['AUDUSD','AUD/USD'], key:'AUDUSD', label:'AUD/USD', name:'Aussie', bot:'AUDBOT', defSL:0.0015, defTP:0.003},
+  {match:['XAUUSD','XAU/USD','GOLD'], key:'XAUUSD', label:'XAU/USD', name:'Gold', bot:'XAUBOT', defSL:2.5, defTP:5},
+];
+
+let state = {
+  clientId:'', clientSecret:'', accessToken:'', refreshToken:'',
+  env:'demo', accountId:null, moneyDigits:2,
+  connected:false, accountReady:false,
+  paper:true, armed:false, auto:false,
+  wins:0, losses:0, balance:0, equity:0
+};
+
+let ws=null, msgSeq=0, hbTimer=null;
+let symbolsByNorm = {};   // normalized name -> {symbolId, symbolName}
+let assets = {};          // key -> asset state object
+let currentAsset = null;
+
+const $ = id => document.getElementById(id);
+
+function log(msg, target){
+  const t = new Date().toLocaleTimeString();
+  const el = document.getElementById(target || 'botLogs');
+  if(!el) return;
+  const row = document.createElement('div');
+  row.innerHTML = '<span class="t">'+t+'</span>'+escapeHtml(msg);
+  el.prepend(row);
+  while(el.children.length > 200) el.removeChild(el.lastChild);
+}
+function escapeHtml(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+/* ---------------- Connection ---------------- */
+
+$('btnConnect').onclick = () => {
+  state.clientId = $('inClientId').value.trim();
+  state.clientSecret = $('inClientSecret').value.trim();
+  state.accessToken = $('inAccessToken').value.trim();
+  state.refreshToken = $('inRefreshToken').value.trim();
+  state.env = $('inEnv').value;
+  if(!state.clientId || !state.clientSecret || !state.accessToken){
+    alert('Client ID, Client Secret and Access Token are all required.');
+    return;
+  }
+  connect();
+};
+$('inEnv').onchange = () => { $('liveWarnBox').hidden = $('inEnv').value !== 'live'; };
+
+function connect(){
+  const host = state.env === 'live' ? 'wss://live.ctraderapi.com:5036' : 'wss://demo.ctraderapi.com:5036';
+  setBadge('CONNECTING...', 'off');
+  try{ ws = new WebSocket(host); } catch(e){ alert('Could not open WebSocket: '+e.message); return; }
+
+  ws.onopen = () => {
+    state.connected = true;
+    send(PT.APP_AUTH_REQ, {clientId: state.clientId, clientSecret: state.clientSecret});
+    hbTimer = setInterval(()=> send(PT.HEARTBEAT, {}), 20000);
+  };
+  ws.onmessage = (ev) => {
+    let msg; try{ msg = JSON.parse(ev.data); } catch(e){ return; }
+    handleMessage(msg);
+  };
+  ws.onclose = () => {
+    state.connected = false; state.accountReady = false;
+    clearInterval(hbTimer);
+    setBadge('DISCONNECTED', 'off');
+  };
+  ws.onerror = () => { setBadge('CONNECTION ERROR', 'off'); };
+}
+
+function send(payloadType, payload){
+  if(!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({clientMsgId:'m'+(msgSeq++), payloadType, payload}));
+}
+
+function setBadge(text, cls){
+  const b = $('envBadge');
+  b.textContent = text;
+  b.className = 'envBadge ' + cls;
+}
+
+function handleMessage(msg){
+  const pt = msg.payloadType;
+  const p = msg.payload || {};
+  switch(pt){
+    case PT.APP_AUTH_RES:
+      send(PT.GET_ACCOUNTS_REQ, {accessToken: state.accessToken});
+      break;
+    case PT.GET_ACCOUNTS_RES: {
+      const accounts = p.ctidTraderAccount || [];
+      const wantLive = state.env === 'live';
+      const acc = accounts.find(a => !!a.isLive === wantLive) || accounts[0];
+      if(!acc){ alert('No trading account found on this token for the selected environment.'); return; }
+      state.accountId = acc.ctidTraderAccountId;
+      send(PT.ACC_AUTH_REQ, {ctidTraderAccountId: state.accountId, accessToken: state.accessToken});
+      break;
+    }
+    case PT.ACC_AUTH_RES:
+      state.accountReady = true;
+      setBadge(state.env === 'live' ? 'LIVE · CONNECTED' : 'DEMO · CONNECTED', state.env === 'live' ? 'live' : 'demo');
+      send(PT.TRADER_REQ, {ctidTraderAccountId: state.accountId});
+      send(PT.SYMBOLS_LIST_REQ, {ctidTraderAccountId: state.accountId});
+      send(PT.RECONCILE_REQ, {ctidTraderAccountId: state.accountId, returnProtectionOrders:true});
+      showDashboard();
+      break;
+    case PT.TRADER_RES:
+      applyTrader(p.trader);
+      break;
+    case PT.SYMBOLS_LIST_RES:
+      indexSymbols(p.symbol || []);
+      break;
+    case PT.SYMBOL_BY_ID_RES:
+      applyFullSymbol((p.symbol || [])[0]);
+      break;
+    case PT.SPOT_EVENT:
+      onSpot(p);
+      break;
+    case PT.EXECUTION_EVENT:
+      onExecution(p);
+      break;
+    case PT.ORDER_ERROR_EVENT:
+      log('ORDER ERROR: ' + p.errorCode + (p.description ? (' — ' + p.description) : ''));
+      break;
+    case PT.ERROR_RES:
+      log('API ERROR: ' + p.errorCode + (p.description ? (' — ' + p.description) : ''));
+      break;
+    case PT.RECONCILE_RES:
+      applyReconcile(p);
+      break;
+    default: break;
+  }
+}
+
+/* ---------------- Account / symbols ---------------- */
+
+function applyTrader(trader){
+  if(!trader) return;
+  state.moneyDigits = trader.moneyDigits || 2;
+  state.balance = trader.balance / Math.pow(10, state.moneyDigits);
+  $('stBalance').textContent = '$' + state.balance.toFixed(2);
+  refreshEquity();
+}
+
+function refreshEquity(){
+  let unrealized = 0;
+  Object.values(assets).forEach(a => { if(a.position) unrealized += a.position.floatingPnL || 0; });
+  state.equity = state.balance + unrealized;
+  $('stEquity').textContent = '$' + state.equity.toFixed(2);
+}
+
+function normName(s){ return String(s).toUpperCase().replace(/[^A-Z]/g,''); }
+
+function indexSymbols(list){
+  symbolsByNorm = {};
+  list.forEach(s => { symbolsByNorm[normName(s.symbolName)] = s; });
+
+  const grid = $('assetGrid');
+  grid.innerHTML = '';
+  let found = 0;
+  CANDIDATES.forEach(c => {
+    let hit = null;
+    for(const m of c.match){ const s = symbolsByNorm[normName(m)]; if(s){ hit = s; break; } }
+    if(!hit) return;
+    found++;
+    assets[c.key] = {
+      key:c.key, label:c.label, name:c.name, bot:c.bot, defSL:c.defSL, defTP:c.defTP,
+      symbolId: hit.symbolId, full:null, lastPrice:null,
+      closes:[], emaFast:null, emaSlow:null, position:null
+    };
+    const card = document.createElement('div');
+    card.className = 'assetcard';
+    card.id = 'card_'+c.key;
+    card.onclick = () => openBot(c.key);
+    card.innerHTML = '<b>'+c.label+'</b><small>'+c.name+' · '+c.bot+'</small><div class="price" id="price_'+c.key+'">—</div>';
+    grid.appendChild(card);
+    send(PT.SYMBOL_BY_ID_REQ, {ctidTraderAccountId: state.accountId, symbolId:[hit.symbolId]});
+    send(PT.SUBSCRIBE_SPOTS_REQ, {ctidTraderAccountId: state.accountId, symbolId:[hit.symbolId]});
+  });
+  $('symStatus').textContent = found > 0
+    ? (found + ' tradable instrument(s) found on this account.')
+    : 'No matching forex/crypto instruments were found on this account. Check your broker\'s symbol list.';
+}
+
+function applyFullSymbol(sym){
+  if(!sym) return;
+  const a = Object.values(assets).find(x => x.symbolId === sym.symbolId);
+  if(!a) return;
+  a.full = sym;
+}
+
+function applyReconcile(p){
+  (p.position || []).forEach(pos => {
+    const a = Object.values(assets).find(x => x.symbolId === pos.tradeData.symbolId);
+    if(a) trackPosition(a, pos);
+  });
+}
+
+/* ---------------- Live prices & signal engine ---------------- */
+
+function onSpot(p){
+  const a = Object.values(assets).find(x => x.symbolId === p.symbolId);
+  if(!a) return;
+  const bid = p.bid ? p.bid/100000 : a.lastPrice;
+  const ask = p.ask ? p.ask/100000 : a.lastPrice;
+  if(!bid && !ask) return;
+  const mid = ask && bid ? (bid+ask)/2 : (bid||ask);
+  a.lastPrice = mid;
+  const pc = $('price_'+a.key); if(pc) pc.textContent = mid.toFixed(a.full ? a.full.digits : 5);
+
+  a.closes.push(mid);
+  if(a.closes.length > 300) a.closes.shift();
+  updateIndicators(a);
+  if(a.position){ updateFloatingPnL(a); }
+
+  if(currentAsset === a.key) renderBotView(a);
+
+  maybeAutoTrade(a);
+}
+
+function ema(prev, price, period){
+  const k = 2/(period+1);
+  return prev==null ? price : price*k + prev*(1-k);
+}
+
+function updateIndicators(a){
+  a.emaFast = ema(a.emaFast, a.lastPrice, 9);
+  a.emaSlow = ema(a.emaSlow, a.lastPrice, 21);
+
+  const n = a.closes.length;
+  const win = 14;
+  if(n > win){
+    let gains=0, losses=0;
+    for(let i=n-win; i<n; i++){
+      const d = a.closes[i]-a.closes[i-1];
+      if(d>0) gains += d; else losses -= d;
+    }
+    const avgG = gains/win, avgL = losses/win;
+    a.rsi = avgL===0 ? 100 : 100 - (100/(1+ (avgG/avgL)));
+  } else a.rsi = null;
+
+  if(n > 10){
+    const back = a.closes[n-11];
+    a.momentum = back ? ((a.lastPrice-back)/back)*100 : 0;
+  } else a.momentum = null;
+
+  if(n > 20){
+    const seg = a.closes.slice(n-20);
+    let sum=0; for(let i=1;i<seg.length;i++) sum += Math.abs(seg[i]-seg[i-1]);
+    a.volatility = sum/seg.length;
+    const seg2 = a.closes.slice(n-40, n-20);
+    if(seg2.length>1){
+      let sum2=0; for(let i=1;i<seg2.length;i++) sum2 += Math.abs(seg2[i]-seg2[i-1]);
+      a.volAvg = sum2/seg2.length;
+    }
+    const hi = Math.max(...seg), lo = Math.min(...seg);
+    const firstHalf = seg.slice(0, Math.floor(seg.length/2));
+    const secondHalf = seg.slice(Math.floor(seg.length/2));
+    const hi1 = Math.max(...firstHalf), lo1 = Math.min(...firstHalf);
+    const hi2 = Math.max(...secondHalf), lo2 = Math.min(...secondHalf);
+    if(hi2>hi1 && lo2>lo1) a.structure = 'BUY';
+    else if(hi2<hi1 && lo2<lo1) a.structure = 'SELL';
+    else a.structure = 'RANGE';
+  } else { a.structure = null; a.volatility = null; }
+}
+
+function computeSignal(a){
+  const checks = [];
+  let buyVotes=0, sellVotes=0;
+
+  if(a.emaFast!=null && a.emaSlow!=null){
+    const dir = a.emaFast > a.emaSlow ? 'BUY' : 'SELL';
+    checks.push({label:'EMA trend (9/21)', tag:dir});
+    dir==='BUY'?buyVotes++:sellVotes++;
+  } else checks.push({label:'EMA trend (9/21)', tag:'WAIT'});
+
+  if(a.momentum!=null){
+    const dir = a.momentum > 0.02 ? 'BUY' : (a.momentum < -0.02 ? 'SELL' : 'WAIT');
+    checks.push({label:'Momentum', tag:dir});
+    if(dir==='BUY') buyVotes++; else if(dir==='SELL') sellVotes++;
+  } else checks.push({label:'Momentum', tag:'WAIT'});
+
+  if(a.rsi!=null){
+    const dir = a.rsi>52 ? 'BUY' : (a.rsi<48 ? 'SELL' : 'WAIT');
+    checks.push({label:'RSI ('+a.rsi.toFixed(0)+')', tag:dir});
+    if(dir==='BUY') buyVotes++; else if(dir==='SELL') sellVotes++;
+  } else checks.push({label:'RSI', tag:'WAIT'});
+
+  if(a.structure){
+    checks.push({label:'Market structure', tag:a.structure==='RANGE'?'RANGE':a.structure});
+    if(a.structure==='BUY') buyVotes++; else if(a.structure==='SELL') sellVotes++;
+  } else checks.push({label:'Market structure', tag:'WAIT'});
+
+  let volTag = 'PASS';
+  if(a.volatility!=null && a.volAvg){
+    volTag = a.volatility > a.volAvg*2.2 ? 'HIGH' : 'PASS';
+  }
+  checks.push({label:'Volatility filter', tag:volTag});
+
+  const totalVotes = 4;
+  let direction = 'WAIT', agree = 0;
+  if(buyVotes >= 3){ direction='BUY'; agree=buyVotes; }
+  else if(sellVotes >= 3){ direction='SELL'; agree=sellVotes; }
+  else { direction='WAIT'; agree=Math.max(buyVotes,sellVotes); }
+
+  let score = Math.round((agree/totalVotes)*100);
+  if(volTag==='HIGH') score = Math.max(0, score-15);
+  if(a.rsi==null || a.structure==null) score = Math.min(score, 40); // still warming up
+
+  return {direction, score, checks};
+}
+
+/* ---------------- Bot view ---------------- */
+
+function openBot(key){
+  currentAsset = key;
+  const a = assets[key];
+  $('botTitle').textContent = a.bot;
+  $('botSubtitle').textContent = a.label + ' · ' + a.name;
+  $('inSL').value = a.defSL;
+  $('inTP').value = a.defTP;
+  $('dashboard').hidden = true;
+  $('botView').hidden = false;
+  $('botLogs').innerHTML = '';
+  log('Bot opened for ' + a.label + '. Warming up indicators from live ticks...');
+  renderBotView(a);
+}
+
+function showDashboard(){
+  currentAsset = null;
+  $('botView').hidden = true;
+  $('dashboard').hidden = false;
+}
+
+function renderBotView(a){
+  const sig = computeSignal(a);
+  a.lastSignal = sig;
+  const sigEl = $('sigText');
+  sigEl.textContent = sig.direction;
+  sigEl.className = 'sig ' + sig.direction;
+  $('sigPrice').textContent = a.lastPrice ? ('price ' + a.lastPrice.toFixed(a.full?a.full.digits:5)) : 'waiting for price...';
+  $('confFill').style.width = sig.score + '%';
+  $('confText').textContent = 'confirmation score ' + sig.score + '/100';
+
+  const list = $('checksList');
+  list.innerHTML = '';
+  sig.checks.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'check';
+    row.innerHTML = '<span>'+c.label+'</span><span class="tag '+c.tag+'">'+c.tag+'</span>';
+    list.appendChild(row);
+  });
+
+  if(a.position){
+    $('positionPanel').hidden = false;
+    const p = a.position;
+    $('positionBox').innerHTML =
+      '<div>'+ (p.side==='BUY'?'<span class="pos">BUY</span>':'<span class="neg">SELL</span>') +' '+ a.label +'</div>'+
+      '<div class="small">Entry: '+p.entryPrice.toFixed(5)+' · Volume: '+p.volume+'</div>'+
+      '<div style="margin-top:6px;font-size:18px;font-weight:700;" class="'+((p.floatingPnL||0)>=0?'pos':'neg')+'">'+
+        ((p.floatingPnL||0)>=0?'+':'') + (p.floatingPnL||0).toFixed(2) + '</div>';
+  } else {
+    $('positionPanel').hidden = true;
+  }
+}
+
+/* ---------------- Trading ---------------- */
+
+function toggleSwitch(which){
+  if(which==='paper'){
+    state.paper = !state.paper;
+    $('swPaper').classList.toggle('on', state.paper);
+    if(state.paper){ state.armed=false; $('swArm').classList.remove('on','armed'); }
+  } else if(which==='arm'){
+    if(state.paper){ alert('Turn Paper mode OFF first — arming only matters for real orders.'); return; }
+    if(state.env!=='live' && !state.armed){
+      // arming allowed on demo too (sends real demo orders), just skip the extra confirm
+    }
+    if(!state.armed && state.env==='live'){
+      if(!confirm('This will allow REAL MONEY orders to be sent to your live cTrader account. Continue?')) return;
+    }
+    state.armed = !state.armed;
+    const el = $('swArm');
+    el.classList.toggle('on', state.armed);
+    el.classList.toggle('armed', state.armed && state.env==='live');
+  } else if(which==='auto'){
+    state.auto = !state.auto;
+    $('swAuto').classList.toggle('on', state.auto);
+  }
+}
+
+function canSendRealOrders(){
+  return !state.paper && (state.env==='demo' || (state.env==='live' && state.armed));
+}
+
+function maybeAutoTrade(a){
+  if(!state.auto) return;
+  if(!a.lastSignal || a.position) return;
+  const sig = a.lastSignal;
+  const minScore = parseInt($('inMinScore') ? $('inMinScore').value : 70) || 70;
+  if(sig.direction!=='WAIT' && sig.score >= minScore){
+    executeTrade(a, sig.direction);
+  }
+}
+
+function manualTrade(side){
+  if(!currentAsset) return;
+  executeTrade(assets[currentAsset], side);
+}
+
+function executeTrade(a, side){
+  if(!a.lastPrice){ log('No live price yet for '+a.label+'.'); return; }
+  if(a.position){ log('Already in a position on '+a.label+' — close it first.'); return; }
+
+  const volMult = parseInt($('inVolMult').value)||1;
+  const slDist = parseFloat($('inSL').value)|| a.defSL;
+  const tpDist = parseFloat($('inTP').value)|| a.defTP;
+  const relSL = Math.round(slDist*100000);
+  const relTP = Math.round(tpDist*100000);
+  const minVol = a.full ? a.full.minVolume : 1000;
+  const step = a.full ? (a.full.stepVolume||minVol) : minVol;
+  const volume = minVol + step*(volMult-1);
+
+  if(!canSendRealOrders()){
+    // PAPER SIMULATION — no order sent
+    a.position = {side, entryPrice:a.lastPrice, volume, paper:true, floatingPnL:0};
+    log('[PAPER] '+side+' '+a.label+' vol='+volume+' @ '+a.lastPrice.toFixed(5));
+    renderBotView(a);
+    return;
+  }
+
+  send(PT.NEW_ORDER_REQ, {
+    ctidTraderAccountId: state.accountId,
+    symbolId: a.symbolId,
+    orderType: 1,               // MARKET
+    tradeSide: side==='BUY'?1:2,
+    volume,
+    relativeStopLoss: relSL,
+    relativeTakeProfit: relTP,
+    comment: 'MorganAI',
+    label: a.key
+  });
+  log('Order sent: '+side+' '+a.label+' vol='+volume+' (real order to '+state.env+' account)');
+}
+
+function closeCurrentPosition(){
+  if(!currentAsset) return;
+  const a = assets[currentAsset];
+  if(!a.position) return;
+  if(a.position.paper){
+    log('[PAPER] Closed '+a.position.side+' '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
+    if((a.position.floatingPnL||0)>=0) recordResult(true); else recordResult(false);
+    a.position = null;
+    renderBotView(a);
+    return;
+  }
+  send(PT.CLOSE_POSITION_REQ, {
+    ctidTraderAccountId: state.accountId,
+    positionId: a.position.positionId,
+    volume: a.position.volume
+  });
+  log('Close position request sent.');
+}
+
+function trackPosition(a, posPayload){
+  a.position = {
+    positionId: posPayload.positionId,
+    side: posPayload.tradeData.tradeSide===1 ? 'BUY':'SELL',
+    entryPrice: posPayload.price,
+    volume: posPayload.tradeData.volume,
+    floatingPnL: 0
+  };
+  renderBotView(a);
+}
+
+function updateFloatingPnL(a){
+  if(!a.position || a.position.paper===undefined){
+    if(!a.position) return;
+  }
+  if(!a.position) return;
+  const dir = a.position.side==='BUY' ? 1 : -1;
+  const priceDiff = (a.lastPrice - a.position.entryPrice) * dir;
+  // Rough estimate in quote currency terms; exact P&L/moneyDigits conversion happens server-side on close.
+  a.position.floatingPnL = priceDiff * (a.position.volume/100);
+  refreshEquity();
+}
+
+function onExecution(p){
+  const et = p.executionType;
+  const a = p.position ? Object.values(assets).find(x=>x.symbolId===p.position.tradeData.symbolId)
+          : (p.order ? Object.values(assets).find(x=>x.symbolId===p.order.tradeData.symbolId) : null);
+  if(et===2){ log('Order accepted by broker.'); }
+  else if(et===3 || et===11){
+    if(p.deal){
+      log('FILLED '+(p.deal.tradeSide===1?'BUY':'SELL')+' @ '+p.deal.executionPrice);
+      if(p.deal.closePositionDetail){
+        const gp = p.deal.closePositionDetail.grossProfit / Math.pow(10, state.moneyDigits);
+        log('Position closed. Realized P&L: '+(gp>=0?'+':'')+gp.toFixed(2));
+        recordResult(gp>=0);
+        if(a) a.position = null;
+      }
+    }
+    if(p.position && p.position.positionStatus===1 && a) trackPosition(a, p.position);
+    send(PT.TRADER_REQ, {ctidTraderAccountId: state.accountId});
+    if(currentAsset && a && a.key===currentAsset) renderBotView(a);
+  }
+  else if(et===5){ log('Order cancelled.'); }
+  else if(et===7){ log('Order rejected: '+(p.errorCode||'unknown reason')); }
+}
+
+function recordResult(won){
+  if(won){ state.wins++; $('stWins').textContent = state.wins; }
+  else { state.losses++; $('stLosses').textContent = state.losses; }
+}
+
+if("serviceWorker" in navigator){
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(()=>{}));
+}
+</script>
+</body>
+</html>
