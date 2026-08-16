@@ -54,6 +54,32 @@ signals, no fake wallet balance.
 Same as before — open `index.html` directly, or serve it from Termux's HTTP server and
 open it in Chrome/Edge. No build step, no other files required.
 
+## Risk management
+
+A dedicated panel on the dashboard, shared across both brokers:
+
+- **Risk-based sizing** (on by default) — trade size is calculated from "risk % of
+  balance ÷ stop-loss distance" instead of a flat manual amount. Turn it off to go back
+  to typing an exact volume/amount per trade.
+- **Daily loss limit** — once realized losses for the day hit this %, new trades are
+  blocked until the next day. Resets automatically at midnight (device local time).
+- **Portfolio risk cap** — total risk across every open position combined can't exceed
+  this % of balance, even if each individual trade looks fine on its own.
+- **Breakeven trigger** — once a trade moves this % in your favor, cTrader trades get a
+  real stop-loss amendment moving the stop to entry (so that trade can no longer turn
+  into a loss). Binance has no server-side stop-loss orders, so this is a
+  software-watched equivalent instead — it arms once triggered and auto-closes if price
+  falls back to entry. This only works while the page and (for Binance) the relay stay
+  open; it is not a server-side protection like cTrader's.
+- **Max spread filter** — a signal is skipped if the live bid/ask spread is wider than
+  this %, since a wide spread usually means bad execution conditions.
+
+On execution speed: orders are already sent as immediate market orders on live tick
+data with no artificial delay — that part is already as fast as it gets. These risk
+settings control how much is risked per trade, not how quickly orders fire. Loosening
+them (higher risk %, no daily cap) means more frequent and larger trades, not faster
+ones — and it directly increases how much you can lose, so change them deliberately.
+
 ## Notes / next steps
 
 - Volume is entered as a multiple of the broker's minimum tradable size for that

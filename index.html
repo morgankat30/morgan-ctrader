@@ -224,6 +224,28 @@ a{color:var(--cyan);}
       </div>
 
       <div class="panel">
+        <h2>Risk management</h2>
+        <p class="small">Execution itself is already immediate — market orders on live ticks, no artificial delay. These settings control how much gets risked per trade, not how fast orders fire.</p>
+        <div class="toggle">
+          <div><b>Risk-based sizing</b><div class="small">Size each trade from your risk % below instead of a fixed amount. Off = use the manual amount in each bot screen.</div></div>
+          <div class="switch on" id="swRiskSizing" onclick="toggleRiskSizing()"></div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <div><label>Risk per trade (%)</label><input id="inRiskPct" type="number" step="0.1" min="0.1" value="1" onchange="updateRiskSetting('riskPct', this.value)"></div>
+          <div><label>Daily loss limit (%)</label><input id="inDailyLoss" type="number" step="0.5" min="0.5" value="3" onchange="updateRiskSetting('dailyLossLimitPct', this.value)"></div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <div><label>Portfolio risk cap (%)</label><input id="inPortfolioCap" type="number" step="0.5" min="1" value="5" onchange="updateRiskSetting('portfolioRiskCapPct', this.value)"></div>
+          <div><label>Breakeven trigger (%)</label><input id="inBreakeven" type="number" step="0.1" min="0.05" value="0.3" onchange="updateRiskSetting('breakevenTriggerPct', this.value)"></div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <div><label>Max spread (%)</label><input id="inMaxSpread" type="number" step="0.01" min="0.01" value="0.08" onchange="updateRiskSetting('maxSpreadPct', this.value)"></div>
+          <div></div>
+        </div>
+        <p class="small" id="dailyLossStatus" style="margin-top:8px;"></p>
+      </div>
+
+      <div class="panel">
         <h2>Trading assets</h2>
         <p class="small" id="symStatus">Loading symbols from your broker...</p>
         <div class="row" id="bnSearchRow" hidden style="margin-top:10px;">
@@ -299,6 +321,7 @@ const PT = {
   ACC_AUTH_REQ:2102, ACC_AUTH_RES:2103,
   NEW_ORDER_REQ:2106,
   CLOSE_POSITION_REQ:2111,
+  AMEND_POSITION_SLTP_REQ:2110,
   SYMBOLS_LIST_REQ:2114, SYMBOLS_LIST_RES:2115,
   SYMBOL_BY_ID_REQ:2116, SYMBOL_BY_ID_RES:2117,
   TRADER_REQ:2121, TRADER_RES:2122,
@@ -333,9 +356,57 @@ let state = {
   env:'demo', accountId:null, moneyDigits:2,
   connected:false, accountReady:false,
   paper:true, armed:false, auto:false,
-  wins:0, losses:0, balance:0, equity:0
+  wins:0, losses:0, balance:0, equity:0,
+  risk:{
+    riskPct:1, dailyLossLimitPct:3, portfolioRiskCapPct:5,
+    breakevenTriggerPct:0.3, maxSpreadPct:0.08,
+    useRiskSizing:true,
+    dailyLossUsed:0, dailyDateKey:''
+  }
 };
 
+function todayKey(){ return new Date().toISOString().slice(0,10); }
+function resetDailyIfNeeded(){
+  const k = todayKey();
+  if(state.risk.dailyDateKey !== k){ state.risk.dailyDateKey = k; state.risk.dailyLossUsed = 0; }
+}
+function dailyLossLimitHit(){
+  resetDailyIfNeeded();
+  const cap = state.balance * (state.risk.dailyLossLimitPct/100);
+  return cap > 0 && state.risk.dailyLossUsed >= cap;
+}
+function currentPortfolioRiskDollars(){
+  let total = 0;
+  Object.values(assets).forEach(a => {
+    if(!a.position) return;
+    if(state.broker === 'ctrader' && a.position.riskDollars) total += a.position.riskDollars;
+    else if(state.broker === 'binance') total += (a.position.entryPrice||0) * (a.position.volume||0);
+  });
+  return total;
+}
+function spreadOk(a){
+  if(a.lastBid == null || a.lastAsk == null || !a.lastPrice) return true;
+  const spreadPct = ((a.lastAsk - a.lastBid) / a.lastPrice) * 100;
+  return spreadPct <= state.risk.maxSpreadPct;
+}
+function riskGate(a, prospectiveRiskDollars){
+  if(dailyLossLimitHit()){
+    log('Blocked: daily loss limit reached ($' + state.risk.dailyLossUsed.toFixed(2) + '). Trading paused until tomorrow.');
+    return false;
+  }
+  if(!spreadOk(a)){
+    const spreadPct = ((a.lastAsk - a.lastBid) / a.lastPrice) * 100;
+    log('Blocked: spread too wide right now (' + spreadPct.toFixed(3) + '% > ' + state.risk.maxSpreadPct + '% limit).');
+    return false;
+  }
+  const cap = state.balance * (state.risk.portfolioRiskCapPct/100);
+  const current = currentPortfolioRiskDollars();
+  if(cap > 0 && (current + prospectiveRiskDollars) > cap){
+    log('Blocked: would exceed portfolio risk cap ($' + current.toFixed(2) + ' open + $' + prospectiveRiskDollars.toFixed(2) + ' new > $' + cap.toFixed(2) + ' cap).');
+    return false;
+  }
+  return true;
+}
 const BINANCE_CANDIDATES = [
   {symbol:'BTCUSDT', key:'BTCUSDT', label:'BTC/USDT', name:'Bitcoin', bot:'BTCBOT', defSL:60, defTP:120},
   {symbol:'ETHUSDT', key:'ETHUSDT', label:'ETH/USDT', name:'Ethereum', bot:'ETHBOT', defSL:5, defTP:10},
@@ -720,19 +791,42 @@ function bnSubscribe(a){
     let msg; try{ msg = JSON.parse(ev.data); } catch(e){ return; }
     const bid = parseFloat(msg.b), ask = parseFloat(msg.a);
     if(!bid || !ask) return;
+    a.lastBid = bid; a.lastAsk = ask;
     const mid = (bid+ask)/2;
     a.lastPrice = mid;
     const pc = $('price_'+a.key); if(pc) pc.textContent = mid.toFixed(mid < 1 ? 6 : (mid < 100 ? 4 : 2));
     a.closes.push(mid);
     if(a.closes.length > 400) a.closes.shift();
     updateIndicators(a, true); // faster-tuned periods for crypto
-    if(a.position) updateFloatingPnL(a);
+    if(a.position){ updateFloatingPnL(a); checkBreakevenBinance(a); }
     if(currentAsset === a.key) renderBotView(a);
     maybeAutoTrade(a);
   };
   sock.onerror = () => { log('Price stream error for '+a.label+'.'); };
   bnSockets[a.key] = sock;
 }
+
+function checkBreakevenBinance(a){
+  const pos = a.position;
+  if(!pos || pos.paper || !pos.entryPrice) return;
+  const moveFavorPct = pos.side === 'BUY'
+    ? ((a.lastPrice - pos.entryPrice) / pos.entryPrice) * 100
+    : ((pos.entryPrice - a.lastPrice) / pos.entryPrice) * 100;
+
+  if(!pos.beArmed && moveFavorPct >= state.risk.breakevenTriggerPct){
+    pos.beArmed = true;
+    log('Breakeven protection armed for ' + a.label + ' — Binance has no server-side stop, so this auto-closes in software if price falls back to entry. Only works while this page and the relay stay open.');
+    return;
+  }
+  if(pos.beArmed){
+    const backAtEntry = pos.side === 'BUY' ? a.lastPrice <= pos.entryPrice : a.lastPrice >= pos.entryPrice;
+    if(backAtEntry){
+      log('Price returned to entry after breakeven was armed — auto-closing ' + a.label + ' to protect the trade.');
+      bnCloseCurrentPositionFor(a);
+    }
+  }
+}
+
 
 function bnRoundQty(qty, step){
   if(!step) return qty;
@@ -742,21 +836,43 @@ function bnRoundQty(qty, step){
 
 async function bnExecuteTrade(a, side){
   if(!a.lastPrice){ log('No live price yet for '+a.label+'.'); return; }
-  if(!a.full){ log('Still loading '+a.label+'\'s trading rules from Binance — try again in a moment.'); return; }
 
-  let amountUsdt = parseFloat($('inVolMult').value) || 1;
-  const minNotional = a.full.minNotional || 5;
-  if(amountUsdt < minNotional){
-    log('$'+amountUsdt.toFixed(2)+' is below Binance\'s real minimum for '+a.label+' ($'+minNotional.toFixed(2)+'). Using $'+minNotional.toFixed(2)+' instead.');
-    amountUsdt = minNotional;
+  const isClosing = side === 'SELL' && a.position;
+  let quantity;
+
+  if(isClosing){
+    quantity = a.position.volume; // sell exactly what we hold, no gating/sizing on a close
+  } else {
+    if(a.position){ log('Already in a position on '+a.label+' — close it first.'); return; }
+    if(!a.full){ log('Still loading '+a.label+'\'s trading rules from Binance — try again in a moment.'); return; }
+
+    let amountUsdt;
+    if(state.risk.useRiskSizing){
+      amountUsdt = state.balance * (state.risk.riskPct/100);
+    } else {
+      amountUsdt = parseFloat($('inVolMult').value) || 1;
+    }
+    const minNotional = a.full.minNotional || 5;
+    if(amountUsdt < minNotional){
+      log('$'+amountUsdt.toFixed(2)+' is below Binance\'s real minimum for '+a.label+' ($'+minNotional.toFixed(2)+'). Using $'+minNotional.toFixed(2)+' instead.');
+      amountUsdt = minNotional;
+    }
+    quantity = bnRoundQty(amountUsdt / a.lastPrice, a.full.stepSize);
+    if(quantity < a.full.minQty) quantity = bnRoundQty(a.full.minQty, a.full.stepSize) || a.full.minQty;
+    if(!quantity){ log('Could not size a valid order for '+a.label+'.'); return; }
+
+    if(!riskGate(a, quantity * a.lastPrice)) return;
   }
-  let quantity = bnRoundQty(amountUsdt / a.lastPrice, a.full.stepSize);
-  if(quantity < a.full.minQty) quantity = bnRoundQty(a.full.minQty, a.full.stepSize) || a.full.minQty;
-  if(!quantity){ log('Could not size a valid order for '+a.label+'.'); return; }
 
   if(!canSendRealOrders()){
-    a.position = {side, entryPrice:a.lastPrice, volume:quantity, paper:true, floatingPnL:0};
-    log('[PAPER] '+side+' '+a.label+' ~$'+(quantity*a.lastPrice).toFixed(2)+' (qty '+quantity+') @ '+a.lastPrice);
+    if(isClosing){
+      log('[PAPER] Closed '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
+      recordResult(a.position.floatingPnL||0);
+      a.position = null;
+    } else {
+      a.position = {side:'BUY', entryPrice:a.lastPrice, volume:quantity, paper:true, floatingPnL:0, beArmed:false};
+      log('[PAPER] BUY '+a.label+' ~$'+(quantity*a.lastPrice).toFixed(2)+' (qty '+quantity+') @ '+a.lastPrice);
+    }
     renderBotView(a);
     return;
   }
@@ -766,14 +882,14 @@ async function bnExecuteTrade(a, side){
     const res = await bnRelayCall('/api/binance/order', {symbol:a.symbol, side, quantity});
     if(res.error){ log('ORDER ERROR: ' + res.error); return; }
     log('FILLED '+side+' '+a.label+' qty='+res.executedQty+' avg price ~'+(res.cummulativeQuoteQty/res.executedQty).toFixed(4));
-    if(side === 'BUY'){
-      a.position = {side:'BUY', entryPrice: res.cummulativeQuoteQty/res.executedQty, volume: parseFloat(res.executedQty), floatingPnL:0};
-    } else if(a.position){
+    if(side === 'BUY' && !isClosing){
+      a.position = {side:'BUY', entryPrice: res.cummulativeQuoteQty/res.executedQty, volume: parseFloat(res.executedQty), floatingPnL:0, beArmed:false};
+    } else if(isClosing){
       const proceeds = parseFloat(res.cummulativeQuoteQty);
       const cost = a.position.entryPrice * a.position.volume;
       const gp = proceeds - cost;
       log('Position closed. Realized P&L: '+(gp>=0?'+':'')+gp.toFixed(2));
-      recordResult(gp>=0);
+      recordResult(gp);
       a.position = null;
     }
     const acct = await bnRelayCall('/api/binance/account', {});
@@ -786,15 +902,19 @@ async function bnExecuteTrade(a, side){
 
 function bnCloseCurrentPosition(){
   const a = assets[currentAsset];
+  if(!a) return;
+  bnCloseCurrentPositionFor(a);
+}
+function bnCloseCurrentPositionFor(a){
   if(!a || !a.position) return;
   if(a.position.paper){
     log('[PAPER] Closed '+a.position.side+' '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
-    recordResult((a.position.floatingPnL||0)>=0);
+    recordResult(a.position.floatingPnL||0);
     a.position = null;
-    renderBotView(a);
+    if(currentAsset === a.key) renderBotView(a);
     return;
   }
-  bnExecuteTrade(a, 'SELL');
+  bnExecuteTrade(a, a.position.side === 'BUY' ? 'SELL' : 'BUY');
 }
 
 
@@ -952,9 +1072,10 @@ function applyReconcile(p){
 function onSpot(p){
   const a = Object.values(assets).find(x => x.symbolId === p.symbolId);
   if(!a) return;
-  const bid = p.bid ? p.bid/100000 : a.lastPrice;
-  const ask = p.ask ? p.ask/100000 : a.lastPrice;
+  const bid = p.bid ? p.bid/100000 : (a.lastBid != null ? a.lastBid : a.lastPrice);
+  const ask = p.ask ? p.ask/100000 : (a.lastAsk != null ? a.lastAsk : a.lastPrice);
   if(!bid && !ask) return;
+  a.lastBid = bid; a.lastAsk = ask;
   const mid = ask && bid ? (bid+ask)/2 : (bid||ask);
   a.lastPrice = mid;
   const pc = $('price_'+a.key); if(pc) pc.textContent = mid.toFixed(a.full ? a.full.digits : 5);
@@ -962,11 +1083,29 @@ function onSpot(p){
   a.closes.push(mid);
   if(a.closes.length > 300) a.closes.shift();
   updateIndicators(a);
-  if(a.position){ updateFloatingPnL(a); }
+  if(a.position){ updateFloatingPnL(a); checkBreakevenCtrader(a); }
 
   if(currentAsset === a.key) renderBotView(a);
 
   maybeAutoTrade(a);
+}
+
+function checkBreakevenCtrader(a){
+  const pos = a.position;
+  if(!pos || pos.paper || pos.beMoved || !pos.entryPrice) return;
+  const moveFavorPct = pos.side === 'BUY'
+    ? ((a.lastPrice - pos.entryPrice) / pos.entryPrice) * 100
+    : ((pos.entryPrice - a.lastPrice) / pos.entryPrice) * 100;
+  if(moveFavorPct >= state.risk.breakevenTriggerPct){
+    pos.beMoved = true; // set immediately to avoid firing twice while the amend is in flight
+    send(PT.AMEND_POSITION_SLTP_REQ, {
+      ctidTraderAccountId: state.accountId,
+      positionId: pos.positionId,
+      stopLoss: pos.entryPrice,
+      takeProfit: pos.takeProfitPrice
+    });
+    log('Moved to breakeven: SL now at entry (' + pos.entryPrice.toFixed(5) + ') for ' + a.label + '.');
+  }
 }
 
 function ema(prev, price, period){
@@ -1091,6 +1230,9 @@ function openBot(key){
 
 function showDashboard(){
   currentAsset = null;
+  $('setupPanel').hidden = true;
+  $('setupPanelBinance').hidden = true;
+  $('brokerSelect').hidden = true;
   $('botView').hidden = true;
   $('dashboard').hidden = false;
 }
@@ -1128,6 +1270,13 @@ function renderBotView(a){
 }
 
 /* ---------------- Trading ---------------- */
+
+function updateRiskSetting(key, val){
+  state.risk[key] = parseFloat(val) || state.risk[key];
+}
+function toggleRiskSizing(){
+  state.risk.useRiskSizing = $('swRiskSizing').classList.toggle('on');
+}
 
 function toggleSwitch(which){
   const isLive = state.broker === 'binance' ? state.bnEnv === 'live' : state.env === 'live';
@@ -1177,19 +1326,32 @@ function ctExecuteTrade(a, side){
   if(!a.lastPrice){ log('No live price yet for '+a.label+'.'); return; }
   if(a.position){ log('Already in a position on '+a.label+' — close it first.'); return; }
 
-  const volMult = parseInt($('inVolMult').value)||1;
   const slDist = parseFloat($('inSL').value)|| a.defSL;
   const tpDist = parseFloat($('inTP').value)|| a.defTP;
   const relSL = Math.round(slDist*100000);
   const relTP = Math.round(tpDist*100000);
   const minVol = a.full ? a.full.minVolume : 1000;
   const step = a.full ? (a.full.stepVolume||minVol) : minVol;
-  const volume = minVol + step*(volMult-1);
+
+  let volume;
+  if(state.risk.useRiskSizing && slDist > 0){
+    const riskDollars = state.balance * (state.risk.riskPct/100);
+    const rawVolume = (riskDollars * 100) / slDist;
+    volume = Math.max(minVol, Math.round(rawVolume/step)*step);
+  } else {
+    const volMult = parseInt($('inVolMult').value)||1;
+    volume = minVol + step*(volMult-1);
+  }
+  const prospectiveRisk = slDist * volume/100;
+
+  if(!riskGate(a, prospectiveRisk)) return;
 
   if(!canSendRealOrders()){
     // PAPER SIMULATION — no order sent
-    a.position = {side, entryPrice:a.lastPrice, volume, paper:true, floatingPnL:0};
-    log('[PAPER] '+side+' '+a.label+' vol='+volume+' @ '+a.lastPrice.toFixed(5));
+    a.position = {side, entryPrice:a.lastPrice, volume, paper:true, floatingPnL:0,
+      takeProfitPrice: side==='BUY' ? a.lastPrice+tpDist : a.lastPrice-tpDist,
+      riskDollars: prospectiveRisk, beMoved:false};
+    log('[PAPER] '+side+' '+a.label+' vol='+volume+' @ '+a.lastPrice.toFixed(5)+' (risking ~$'+prospectiveRisk.toFixed(2)+')');
     renderBotView(a);
     return;
   }
@@ -1205,7 +1367,7 @@ function ctExecuteTrade(a, side){
     comment: 'MorganAI',
     label: a.key
   });
-  log('Order sent: '+side+' '+a.label+' vol='+volume+' (real order to '+state.env+' account)');
+  log('Order sent: '+side+' '+a.label+' vol='+volume+' risking ~$'+prospectiveRisk.toFixed(2)+' (real order to '+state.env+' account)');
 }
 
 function closeCurrentPosition(){
@@ -1215,7 +1377,7 @@ function closeCurrentPosition(){
   if(state.broker === 'binance'){ bnCloseCurrentPosition(); return; }
   if(a.position.paper){
     log('[PAPER] Closed '+a.position.side+' '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
-    if((a.position.floatingPnL||0)>=0) recordResult(true); else recordResult(false);
+    recordResult(a.position.floatingPnL||0);
     a.position = null;
     renderBotView(a);
     return;
@@ -1229,11 +1391,17 @@ function closeCurrentPosition(){
 }
 
 function trackPosition(a, posPayload){
+  const entryPrice = posPayload.price;
+  const stopLossPrice = posPayload.stopLoss || null;
+  const takeProfitPrice = posPayload.takeProfit || null;
+  const volume = posPayload.tradeData.volume;
   a.position = {
     positionId: posPayload.positionId,
     side: posPayload.tradeData.tradeSide===1 ? 'BUY':'SELL',
-    entryPrice: posPayload.price,
-    volume: posPayload.tradeData.volume,
+    entryPrice, volume,
+    takeProfitPrice,
+    riskDollars: stopLossPrice ? Math.abs(entryPrice - stopLossPrice) * volume/100 : 0,
+    beMoved: false,
     floatingPnL: 0
   };
   renderBotView(a);
@@ -1262,7 +1430,7 @@ function onExecution(p){
       if(p.deal.closePositionDetail){
         const gp = p.deal.closePositionDetail.grossProfit / Math.pow(10, state.moneyDigits);
         log('Position closed. Realized P&L: '+(gp>=0?'+':'')+gp.toFixed(2));
-        recordResult(gp>=0);
+        recordResult(gp);
         if(a) a.position = null;
       }
     }
@@ -1274,9 +1442,20 @@ function onExecution(p){
   else if(et===7){ log('Order rejected: '+(p.errorCode||'unknown reason')); }
 }
 
-function recordResult(won){
+function recordResult(pnlAmount){
+  const won = pnlAmount >= 0;
   if(won){ state.wins++; $('stWins').textContent = state.wins; }
-  else { state.losses++; $('stLosses').textContent = state.losses; }
+  else {
+    state.losses++; $('stLosses').textContent = state.losses;
+    resetDailyIfNeeded();
+    state.risk.dailyLossUsed += Math.abs(pnlAmount);
+  }
+  const dl = $('dailyLossStatus');
+  if(dl){
+    const cap = state.balance * (state.risk.dailyLossLimitPct/100);
+    dl.textContent = 'Daily loss used: $' + state.risk.dailyLossUsed.toFixed(2) + ' of $' + cap.toFixed(2) + ' limit'
+      + (dailyLossLimitHit() ? ' — LIMIT REACHED, trading paused today.' : '');
+  }
 }
 
 if("serviceWorker" in navigator){
