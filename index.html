@@ -196,7 +196,7 @@ a{color:var(--cyan);}
       <div class="panel">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <h2 style="margin:0;">Account</h2>
-          <button class="btn-ghost" style="padding:6px 12px; font-size:12px;" onclick="refreshBalanceNow()">↻ Refresh</button>
+          <button class="btn-ghost" style="padding:6px 12px; font-size:12px;" id="btnRefreshBalance" onclick="refreshBalanceNow()">↻ Refresh</button>
         </div>
         <div class="statgrid" style="margin-top:10px;">
           <div class="stat"><div class="lbl">BALANCE</div><div class="val" id="stBalance">$0.00</div></div>
@@ -226,6 +226,11 @@ a{color:var(--cyan);}
       <div class="panel">
         <h2>Trading assets</h2>
         <p class="small" id="symStatus">Loading symbols from your broker...</p>
+        <div class="row" id="bnSearchRow" hidden style="margin-top:10px;">
+          <input id="bnSearchInput" placeholder="e.g. KAITO or PEPEUSDT" style="text-transform:uppercase;">
+          <button class="btn-ghost" style="flex:0 0 auto; padding:10px 16px;" onclick="bnAddSymbolSearch()">Add</button>
+        </div>
+        <p class="small" id="bnSearchStatus" style="margin-top:6px;"></p>
         <div class="assetgrid" id="assetGrid"></div>
       </div>
     </section>
@@ -338,6 +343,9 @@ const BINANCE_CANDIDATES = [
   {symbol:'BNBUSDT', key:'BNBUSDT', label:'BNB/USDT', name:'BNB', bot:'BNBBOT', defSL:1, defTP:2},
   {symbol:'XRPUSDT', key:'XRPUSDT', label:'XRP/USDT', name:'Ripple', bot:'XRPBOT', defSL:0.01, defTP:0.02},
   {symbol:'DOGEUSDT', key:'DOGEUSDT', label:'DOGE/USDT', name:'Dogecoin', bot:'DOGEBOT', defSL:0.002, defTP:0.004},
+  {symbol:'LINKUSDT', key:'LINKUSDT', label:'LINK/USDT', name:'Chainlink', bot:'LINKBOT', defSL:0.2, defTP:0.4},
+  {symbol:'XMRUSDT', key:'XMRUSDT', label:'XMR/USDT', name:'Monero', bot:'XMRBOT', defSL:5, defTP:10},
+  {symbol:'PUMPUSDT', key:'PUMPUSDT', label:'PUMP/USDT', name:'Pump', bot:'PUMPBOT', defSL:0.0001, defTP:0.0002},
 ];
 
 let ws=null, msgSeq=0, hbTimer=null;
@@ -607,33 +615,78 @@ function bnApplyAccount(acct){
 }
 
 async function refreshBalanceNow(){
-  if(state.broker === 'binance'){
-    const acct = await bnRelayCall('/api/binance/account', {});
-    bnApplyAccount(acct);
-  } else {
-    send(PT.TRADER_REQ, {ctidTraderAccountId: state.accountId});
+  const btn = $('btnRefreshBalance');
+  const original = btn.textContent;
+  btn.textContent = 'Refreshing...';
+  btn.disabled = true;
+  try{
+    if(state.broker === 'binance'){
+      const acct = await bnRelayCall('/api/binance/account', {});
+      bnApplyAccount(acct);
+    } else {
+      send(PT.TRADER_REQ, {ctidTraderAccountId: state.accountId});
+      await new Promise(r => setTimeout(r, 600)); // give the WS reply a moment before re-enabling
+    }
+  } catch(e){
+    const statusEl = $('balanceStatus');
+    if(statusEl) statusEl.textContent = 'Refresh failed: could not reach the relay. Is binance_relay.py still running?';
+  } finally {
+    btn.textContent = original;
+    btn.disabled = false;
   }
 }
 
 function bnIndexSymbols(){
   const grid = $('assetGrid');
   grid.innerHTML = '';
-  BINANCE_CANDIDATES.forEach(async c => {
-    assets[c.key] = {
-      key:c.key, label:c.label, name:c.name, bot:c.bot, defSL:c.defSL, defTP:c.defTP,
-      symbol:c.symbol, full:null, lastPrice:null,
-      closes:[], emaFast:null, emaSlow:null, position:null
-    };
-    const card = document.createElement('div');
-    card.className = 'assetcard';
-    card.id = 'card_'+c.key;
-    card.onclick = () => openBot(c.key);
-    card.innerHTML = '<b>'+c.label+'</b><small>'+c.name+' · '+c.bot+'</small><div class="price" id="price_'+c.key+'">—</div>';
-    grid.appendChild(card);
-    bnSubscribe(assets[c.key]);
-    bnFetchFilters(assets[c.key]);
-  });
+  BINANCE_CANDIDATES.forEach(c => bnAddAsset(c));
   $('symStatus').textContent = BINANCE_CANDIDATES.length + ' crypto pairs streaming live from Binance.';
+  $('bnSearchRow').hidden = false;
+}
+
+function bnAddAsset(c){
+  assets[c.key] = {
+    key:c.key, label:c.label, name:c.name, bot:c.bot, defSL:c.defSL, defTP:c.defTP,
+    symbol:c.symbol, full:null, lastPrice:null,
+    closes:[], emaFast:null, emaSlow:null, position:null
+  };
+  const card = document.createElement('div');
+  card.className = 'assetcard';
+  card.id = 'card_'+c.key;
+  card.onclick = () => openBot(c.key);
+  card.innerHTML = '<b>'+c.label+'</b><small>'+c.name+' · '+c.bot+'</small><div class="price" id="price_'+c.key+'">—</div>';
+  $('assetGrid').appendChild(card);
+  bnSubscribe(assets[c.key]);
+  bnFetchFilters(assets[c.key]);
+}
+
+async function bnAddSymbolSearch(){
+  const statusEl = $('bnSearchStatus');
+  let raw = $('bnSearchInput').value.trim().toUpperCase();
+  if(!raw){ return; }
+  const symbol = raw.endsWith('USDT') ? raw : raw + 'USDT';
+  const key = symbol;
+  if(assets[key]){ statusEl.textContent = symbol + ' is already in your list below.'; return; }
+
+  statusEl.textContent = 'Checking ' + symbol + ' on Binance...';
+  try{
+    const info = await bnRelayCall('/api/binance/exchangeInfo', {symbol});
+    const sym = info.symbols && info.symbols[0];
+    if(!sym || sym.status !== 'TRADING'){
+      statusEl.textContent = symbol + ' isn\'t a tradable Binance pair right now (checked spot only).';
+      return;
+    }
+    const base = sym.baseAsset;
+    bnAddAsset({
+      symbol, key,
+      label: base + '/USDT', name: base, bot: base + 'BOT',
+      defSL: 0, defTP: 0 // filled in properly once bnFetchFilters/lastPrice are known; user can adjust in the bot view
+    });
+    statusEl.textContent = symbol + ' added below.';
+    $('bnSearchInput').value = '';
+  } catch(e){
+    statusEl.textContent = 'Could not check that symbol — is the relay running?';
+  }
 }
 
 async function bnFetchFilters(a){
