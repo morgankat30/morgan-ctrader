@@ -194,13 +194,17 @@ a{color:var(--cyan);}
     <!-- DASHBOARD -->
     <section id="dashboard" hidden>
       <div class="panel">
-        <h2>Account</h2>
-        <div class="statgrid">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h2 style="margin:0;">Account</h2>
+          <button class="btn-ghost" style="padding:6px 12px; font-size:12px;" onclick="refreshBalanceNow()">↻ Refresh</button>
+        </div>
+        <div class="statgrid" style="margin-top:10px;">
           <div class="stat"><div class="lbl">BALANCE</div><div class="val" id="stBalance">$0.00</div></div>
           <div class="stat"><div class="lbl">EQUITY</div><div class="val" id="stEquity">$0.00</div></div>
           <div class="stat"><div class="lbl">WINS</div><div class="val pos" id="stWins">0</div></div>
           <div class="stat"><div class="lbl">LOSSES</div><div class="val neg" id="stLosses">0</div></div>
         </div>
+        <p class="small" id="balanceStatus" style="margin-top:8px;"></p>
       </div>
 
       <div class="panel">
@@ -586,10 +590,29 @@ async function bnRelayCall(path, body){
 }
 
 function bnApplyAccount(acct){
-  const usdt = (acct.balances || []).find(b => b.asset === 'USDT');
+  const statusEl = $('balanceStatus');
+  if(!acct || !acct.balances){
+    if(statusEl) statusEl.textContent = 'Could not read balances: ' + JSON.stringify(acct).slice(0,150);
+    return;
+  }
+  const usdt = acct.balances.find(b => b.asset === 'USDT');
+  if(!usdt){
+    if(statusEl) statusEl.textContent = 'No USDT found in Spot — check funds are in Spot, not Funding/Earn/Futures.';
+  } else if(statusEl){
+    statusEl.textContent = 'Last updated ' + new Date().toLocaleTimeString();
+  }
   state.balance = usdt ? parseFloat(usdt.free) + parseFloat(usdt.locked) : 0;
   $('stBalance').textContent = '$' + state.balance.toFixed(2);
   refreshEquity();
+}
+
+async function refreshBalanceNow(){
+  if(state.broker === 'binance'){
+    const acct = await bnRelayCall('/api/binance/account', {});
+    bnApplyAccount(acct);
+  } else {
+    send(PT.TRADER_REQ, {ctidTraderAccountId: state.accountId});
+  }
 }
 
 function bnIndexSymbols(){
