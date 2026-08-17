@@ -200,12 +200,14 @@ a{color:var(--cyan);}
           <button class="btn-ghost" style="padding:6px 12px; font-size:12px;" id="btnRefreshBalance" onclick="refreshBalanceNow()">↻ Refresh</button>
         </div>
         <div class="statgrid" style="margin-top:10px;">
-          <div class="stat"><div class="lbl">BALANCE</div><div class="val" id="stBalance">$0.00</div></div>
+          <div class="stat"><div class="lbl" id="balanceLabel">BALANCE</div><div class="val" id="stBalance">$0.00</div></div>
           <div class="stat"><div class="lbl">EQUITY</div><div class="val" id="stEquity">$0.00</div></div>
           <div class="stat"><div class="lbl">WINS</div><div class="val pos" id="stWins">0</div></div>
           <div class="stat"><div class="lbl">LOSSES</div><div class="val neg" id="stLosses">0</div></div>
         </div>
         <p class="small" id="balanceStatus" style="margin-top:8px;"></p>
+        <button class="btn-danger" id="btnStopAll" style="width:100%; margin-top:12px; font-weight:800;" onclick="stopAllTrading()">⏹ STOP — HALT ALL TRADING</button>
+        <p class="small" id="stopStatus" style="margin-top:6px;"></p>
       </div>
 
       <div class="panel">
@@ -358,8 +360,8 @@ let state = {
   clientId:'', clientSecret:'', accessToken:'', refreshToken:'',
   env:'demo', accountId:null, moneyDigits:2,
   connected:false, accountReady:false,
-  paper:true, armed:false, auto:false,
-  wins:0, losses:0, balance:0, equity:0,
+  paper:true, armed:false, auto:false, stopped:false,
+  wins:0, losses:0, balance:0, equity:0, paperBalance:null,
   risk:{
     riskPct:1, dailyLossLimitPct:3, portfolioRiskCapPct:5,
     breakevenTriggerPct:0.3, maxSpreadPct:0.08,
@@ -393,6 +395,10 @@ function spreadOk(a){
   return spreadPct <= state.risk.maxSpreadPct;
 }
 function riskGate(a, prospectiveRiskDollars){
+  if(state.stopped){
+    log('Blocked: trading is stopped. Tap RESUME TRADING on the dashboard to allow new trades again.');
+    return false;
+  }
   if(dailyLossLimitHit()){
     log('Blocked: daily loss limit reached ($' + state.risk.dailyLossUsed.toFixed(2) + '). Trading paused until tomorrow.');
     return false;
@@ -671,8 +677,8 @@ function bnApplyAccount(acct){
     statusEl.textContent = 'Last updated ' + new Date().toLocaleTimeString();
   }
   state.balance = usdt ? parseFloat(usdt.free) + parseFloat(usdt.locked) : 0;
-  $('stBalance').textContent = '$' + state.balance.toFixed(2);
-  refreshEquity();
+  if(state.paperBalance == null) state.paperBalance = state.balance;
+  updateBalanceDisplay();
 }
 
 async function refreshBalanceNow(){
@@ -862,7 +868,7 @@ async function bnExecuteTrade(a, side){
   if(!canSendRealOrders()){
     if(isClosing){
       log('[PAPER] Closed '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
-      recordResult(a.position.floatingPnL||0);
+      recordResult(a.position.floatingPnL||0, true);
       a.position = null;
     } else {
       a.position = {side:'BUY', entryPrice:a.lastPrice, volume:quantity, paper:true, floatingPnL:0, beArmed:false};
@@ -884,7 +890,7 @@ async function bnExecuteTrade(a, side){
       const cost = a.position.entryPrice * a.position.volume;
       const gp = proceeds - cost;
       log('Position closed. Realized P&L: '+(gp>=0?'+':'')+gp.toFixed(2));
-      recordResult(gp);
+      recordResult(gp, false);
       a.position = null;
     }
     const acct = await bnRelayCall('/api/binance/account', {});
@@ -904,7 +910,7 @@ function bnCloseCurrentPositionFor(a){
   if(!a || !a.position) return;
   if(a.position.paper){
     log('[PAPER] Closed '+a.position.side+' '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
-    recordResult(a.position.floatingPnL||0);
+    recordResult(a.position.floatingPnL||0, true);
     a.position = null;
     if(currentAsset === a.key) renderBotView(a);
     return;
@@ -1019,14 +1025,23 @@ function applyTrader(trader){
   if(!trader) return;
   state.moneyDigits = trader.moneyDigits || 2;
   state.balance = trader.balance / Math.pow(10, state.moneyDigits);
-  $('stBalance').textContent = '$' + state.balance.toFixed(2);
+  if(state.paperBalance == null) state.paperBalance = state.balance;
+  updateBalanceDisplay();
+}
+
+function updateBalanceDisplay(){
+  const showPaper = state.paper;
+  const baseBalance = (showPaper ? state.paperBalance : state.balance) || 0;
+  $('stBalance').textContent = '$' + baseBalance.toFixed(2);
+  $('balanceLabel').textContent = showPaper ? 'BALANCE (PAPER)' : 'BALANCE';
   refreshEquity();
 }
 
 function refreshEquity(){
   let unrealized = 0;
   Object.values(assets).forEach(a => { if(a.position) unrealized += a.position.floatingPnL || 0; });
-  state.equity = state.balance + unrealized;
+  const base = (state.paper ? state.paperBalance : state.balance) || 0;
+  state.equity = base + unrealized;
   $('stEquity').textContent = '$' + state.equity.toFixed(2);
 }
 
@@ -1276,22 +1291,30 @@ function showDashboard(){
 
 function renderBotView(a){
   const sig = computeSignal(a);
-  a.lastSignal = sig;
-  const sigEl = $('sigText');
-  sigEl.textContent = sig.direction;
-  sigEl.className = 'sig ' + sig.direction;
-  $('sigPrice').textContent = a.lastPrice ? ('price ' + a.lastPrice.toFixed(a.full?a.full.digits:5)) : 'waiting for price...';
-  $('confFill').style.width = sig.score + '%';
-  $('confText').textContent = 'confirmation score ' + sig.score + '/100';
+  a.lastSignal = sig; // always kept fresh — this is what auto-trade and manual BUY/SELL actually use
 
-  const list = $('checksList');
-  list.innerHTML = '';
-  sig.checks.forEach(c => {
-    const row = document.createElement('div');
-    row.className = 'check';
-    row.innerHTML = '<span>'+c.label+'</span><span class="tag '+c.tag+'">'+c.tag+'</span>';
-    list.appendChild(row);
-  });
+  // Only the human-facing signal readout is throttled, so it's readable instead of flickering
+  // every tick. Price and open-position P&L below still update live every tick.
+  const now = Date.now();
+  if(!a.lastSignalRenderTime || now - a.lastSignalRenderTime >= 2500){
+    a.lastSignalRenderTime = now;
+    const sigEl = $('sigText');
+    sigEl.textContent = sig.direction;
+    sigEl.className = 'sig ' + sig.direction;
+    $('confFill').style.width = sig.score + '%';
+    $('confText').textContent = 'confirmation score ' + sig.score + '/100';
+
+    const list = $('checksList');
+    list.innerHTML = '';
+    sig.checks.forEach(c => {
+      const row = document.createElement('div');
+      row.className = 'check';
+      row.innerHTML = '<span>'+c.label+'</span><span class="tag '+c.tag+'">'+c.tag+'</span>';
+      list.appendChild(row);
+    });
+  }
+
+  $('sigPrice').textContent = a.lastPrice ? ('price ' + a.lastPrice.toFixed(a.full?a.full.digits:5)) : 'waiting for price...';
 
   if(a.position){
     $('positionPanel').hidden = false;
@@ -1322,6 +1345,7 @@ function toggleSwitch(which){
     state.paper = !state.paper;
     $('swPaper').classList.toggle('on', state.paper);
     if(state.paper){ state.armed=false; $('swArm').classList.remove('on','armed'); }
+    updateBalanceDisplay();
   } else if(which==='arm'){
     if(state.paper){ alert('Turn Paper mode OFF first — arming only matters for real orders.'); return; }
     if(!state.armed && isLive){
@@ -1340,6 +1364,21 @@ function toggleSwitch(which){
 function canSendRealOrders(){
   if(state.broker === 'binance') return !state.paper && (state.bnEnv==='testnet' || (state.bnEnv==='live' && state.armed));
   return !state.paper && (state.env==='demo' || (state.env==='live' && state.armed));
+}
+
+function stopAllTrading(){
+  state.stopped = !state.stopped;
+  const btn = $('btnStopAll');
+  const status = $('stopStatus');
+  if(state.stopped){
+    state.auto = false;
+    $('swAuto').classList.remove('on');
+    btn.textContent = '▶ RESUME TRADING';
+    status.textContent = 'All new trades blocked (auto and manual opens). You can still close existing positions.';
+  } else {
+    btn.textContent = '⏹ STOP — HALT ALL TRADING';
+    status.textContent = '';
+  }
 }
 
 function maybeAutoTrade(a){
@@ -1441,7 +1480,7 @@ function closeCurrentPosition(){
   if(state.broker === 'binance'){ bnCloseCurrentPosition(); return; }
   if(a.position.paper){
     log('[PAPER] Closed '+a.position.side+' '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
-    recordResult(a.position.floatingPnL||0);
+    recordResult(a.position.floatingPnL||0, true);
     a.position = null;
     renderBotView(a);
     return;
@@ -1494,7 +1533,7 @@ function onExecution(p){
       if(p.deal.closePositionDetail){
         const gp = p.deal.closePositionDetail.grossProfit / Math.pow(10, state.moneyDigits);
         log('Position closed. Realized P&L: '+(gp>=0?'+':'')+gp.toFixed(2));
-        recordResult(gp);
+        recordResult(gp, false);
         if(a) a.position = null;
       }
     }
@@ -1506,7 +1545,7 @@ function onExecution(p){
   else if(et===7){ log('Order rejected: '+(p.errorCode||'unknown reason')); }
 }
 
-function recordResult(pnlAmount){
+function recordResult(pnlAmount, isPaper){
   const won = pnlAmount >= 0;
   if(won){ state.wins++; $('stWins').textContent = state.wins; }
   else {
@@ -1514,9 +1553,15 @@ function recordResult(pnlAmount){
     resetDailyIfNeeded();
     state.risk.dailyLossUsed += Math.abs(pnlAmount);
   }
+  if(isPaper){
+    if(state.paperBalance == null) state.paperBalance = state.balance;
+    state.paperBalance += pnlAmount;
+  }
+  updateBalanceDisplay();
   const dl = $('dailyLossStatus');
   if(dl){
-    const cap = state.balance * (state.risk.dailyLossLimitPct/100);
+    const base = isPaper ? state.paperBalance : state.balance;
+    const cap = base * (state.risk.dailyLossLimitPct/100);
     dl.textContent = 'Daily loss used: $' + state.risk.dailyLossUsed.toFixed(2) + ' of $' + cap.toFixed(2) + ' limit'
       + (dailyLossLimitHit() ? ' — LIMIT REACHED, trading paused today.' : '');
   }

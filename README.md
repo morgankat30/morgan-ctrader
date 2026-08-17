@@ -22,12 +22,16 @@ signals, no fake wallet balance.
 
 ## Safety defaults (please keep these until you've tested)
 
-- **Paper mode starts ON.** Signals run live, trades are simulated locally, nothing
-  is sent to your broker.
+- **Paper mode starts ON.** Signals run live, trades are simulated locally against a
+  separate tracked "paper balance" (shown as **BALANCE (PAPER)** on the dashboard) —
+  your real account balance is never touched while this is on.
 - **Live execution requires an explicit "Arm" toggle** in addition to Paper being off,
   and arming on a live account asks for a confirmation first.
 - **Auto-execute starts OFF.** You review the signal and confirmation score yourself
   and tap BUY/SELL, until you trust it enough to flip auto on.
+- **STOP button** at the top of the dashboard immediately blocks any new trade (auto or
+  manual) with one tap. Closing an already-open position still works while stopped —
+  it only blocks new entries. Tap again to resume.
 - **"Remember on this device" is OFF by default.** Flip it on next to Connect if you
   want your keys pre-filled next time — they're saved in this browser's local storage
   on your phone only, never sent anywhere else. A "Forget saved login details" button
