@@ -134,6 +134,7 @@ a{color:var(--cyan);}
         <button class="btn-ghost" style="width:100%; margin-top:12px;" id="btnAuthorize">LOG IN WITH CTRADER TO GET A TOKEN</button>
         <div class="small" id="authCodeBox" style="margin-top:10px;"></div>
         <button class="btn-primary" id="btnConnect">CONNECT</button>
+        <p class="small" id="ctConnectStatus" style="margin-top:8px;"></p>
         <div class="warn-box" id="liveWarnBox" hidden>
           You selected LIVE. This will authorize against your real cTrader account. Trades will only be sent if you separately arm live execution on the dashboard — connecting alone does not place any trade.
         </div>
@@ -908,10 +909,12 @@ function bnCloseCurrentPositionFor(a){
 function connect(){
   const host = state.env === 'live' ? 'wss://live.ctraderapi.com:5036' : 'wss://demo.ctraderapi.com:5036';
   setBadge('CONNECTING...', 'off');
-  try{ ws = new WebSocket(host); } catch(e){ alert('Could not open WebSocket: '+e.message); return; }
+  connectStatus('Opening connection to ' + host + '...');
+  try{ ws = new WebSocket(host); } catch(e){ connectStatus('Could not open WebSocket: '+e.message); return; }
 
   ws.onopen = () => {
     state.connected = true;
+    connectStatus('Connected. Authorizing application...');
     send(PT.APP_AUTH_REQ, {clientId: state.clientId, clientSecret: state.clientSecret});
     hbTimer = setInterval(()=> send(PT.HEARTBEAT, {}), 20000);
   };
@@ -919,12 +922,19 @@ function connect(){
     let msg; try{ msg = JSON.parse(ev.data); } catch(e){ return; }
     handleMessage(msg);
   };
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
     state.connected = false; state.accountReady = false;
     clearInterval(hbTimer);
     setBadge('DISCONNECTED', 'off');
+    if(!state.accountReady) connectStatus('Connection closed before finishing (code ' + ev.code + '). Check your Client ID/Secret/Access Token are correct and try again.');
   };
-  ws.onerror = () => { setBadge('CONNECTION ERROR', 'off'); };
+  ws.onerror = () => { setBadge('CONNECTION ERROR', 'off'); connectStatus('WebSocket error — connection failed.'); };
+}
+
+function connectStatus(msg){
+  const el = $('ctConnectStatus');
+  if(el) el.textContent = msg;
+  log(msg, 'botLogs'); // also keep a copy in the bot-view log for later reference
 }
 
 function send(payloadType, payload){
@@ -943,13 +953,19 @@ function handleMessage(msg){
   const p = msg.payload || {};
   switch(pt){
     case PT.APP_AUTH_RES:
+      connectStatus('Application authorized. Fetching your trading accounts...');
       send(PT.GET_ACCOUNTS_REQ, {accessToken: state.accessToken});
       break;
     case PT.GET_ACCOUNTS_RES: {
       const accounts = p.ctidTraderAccount || [];
       const wantLive = state.env === 'live';
       const acc = accounts.find(a => !!a.isLive === wantLive) || accounts[0];
-      if(!acc){ alert('No trading account found on this token for the selected environment.'); return; }
+      if(!acc){ connectStatus('No trading account found on this token at all.'); return; }
+      if(!accounts.find(a => !!a.isLive === wantLive)){
+        connectStatus('No ' + (wantLive?'live':'demo') + ' account on this token — using ' + (acc.isLive?'live':'demo') + ' account ' + acc.ctidTraderAccountId + ' instead.');
+      } else {
+        connectStatus('Found account ' + acc.ctidTraderAccountId + '. Authorizing...');
+      }
       state.accountId = acc.ctidTraderAccountId;
       send(PT.ACC_AUTH_REQ, {ctidTraderAccountId: state.accountId, accessToken: state.accessToken});
       break;
@@ -981,7 +997,7 @@ function handleMessage(msg){
       log('ORDER ERROR: ' + p.errorCode + (p.description ? (' — ' + p.description) : ''));
       break;
     case PT.ERROR_RES:
-      log('API ERROR: ' + p.errorCode + (p.description ? (' — ' + p.description) : ''));
+      connectStatus('API ERROR: ' + p.errorCode + (p.description ? (' — ' + p.description) : ''));
       break;
     case PT.RECONCILE_RES:
       applyReconcile(p);
