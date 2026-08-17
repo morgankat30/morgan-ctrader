@@ -577,26 +577,13 @@ function handleOAuthRedirect(){
   if(savedSecret) $('inClientSecret').value = savedSecret;
 
   const box = $('authCodeBox');
-  box.innerHTML = 'Authorization received. Exchanging it for a token...';
-
-  const tokenUrl = 'https://connect.spotware.com/apps/token'
-    + '?grant_type=authorization_code'
-    + '&code=' + encodeURIComponent(code)
-    + '&redirect_uri=' + encodeURIComponent(REDIRECT_URI)
-    + '&client_id=' + encodeURIComponent(savedId)
-    + '&client_secret=' + encodeURIComponent(savedSecret);
-
-  fetch(tokenUrl).then(r => r.json()).then(data => {
-    if(data.accessToken || data.access_token){
-      $('inAccessToken').value = data.accessToken || data.access_token;
-      if(data.refreshToken || data.refresh_token) $('inRefreshToken').value = data.refreshToken || data.refresh_token;
-      box.innerHTML = '<span style="color:var(--green)">Token received and filled in below. Tap CONNECT.</span>';
-    } else {
-      showManualExchange(code, savedId, savedSecret, box, JSON.stringify(data));
-    }
-  }).catch(() => {
-    showManualExchange(code, savedId, savedSecret, box, 'browser could not reach cTrader directly (CORS)');
-  });
+  // NOTE: we deliberately do NOT attempt a browser fetch() here first.
+  // cTrader's token endpoint doesn't send CORS headers, so a browser fetch
+  // fails — but the GET request still reaches their server first and burns
+  // the one-time code before the failure is caught, making every following
+  // attempt (including the curl fallback) fail with ACCESS_DENIED. Go
+  // straight to the manual exchange instead so the code is used exactly once.
+  showManualExchange(code, savedId, savedSecret, box, 'browser cannot complete this step directly (cTrader does not allow it)');
 
   // clean the ?code= off the URL so a refresh doesn't re-trigger this
   history.replaceState({}, '', REDIRECT_URI);
