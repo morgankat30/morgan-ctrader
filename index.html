@@ -251,7 +251,7 @@ a{color:var(--cyan);}
         <p class="small" id="symStatus">Loading symbols from your broker...</p>
         <div class="row" id="bnSearchRow" hidden style="margin-top:10px;">
           <input id="bnSearchInput" placeholder="e.g. KAITO or PEPEUSDT" style="text-transform:uppercase;">
-          <button class="btn-ghost" style="flex:0 0 auto; padding:10px 16px;" onclick="bnAddSymbolSearch()">Add</button>
+          <button class="btn-ghost" style="flex:0 0 auto; padding:10px 16px;" onclick="addSymbolSearch()">Add</button>
         </div>
         <p class="small" id="bnSearchStatus" style="margin-top:6px;"></p>
         <div class="assetgrid" id="assetGrid"></div>
@@ -281,13 +281,15 @@ a{color:var(--cyan);}
       <div class="panel">
         <h2>Trade size &amp; protection</h2>
         <div class="row">
-          <div><label id="volLabel">Volume (× broker min)</label><input id="inVolMult" type="number" min="1" value="1"></div>
-          <div id="slWrap"><label>SL distance (price units)</label><input id="inSL" type="number" step="0.0001" value="0.002"></div>
+          <div id="volWrap"><label id="volLabel">Trade amount (USDT)</label><input id="inVolMult" type="number" min="1" value="1"></div>
+          <div id="lotWrap" hidden><label>Lot size</label><input id="inLotSize" type="number" step="0.01" min="0.01" value="0.01"></div>
+          <div id="slWrap"><label>SL distance (price units)</label><input id="inSL" type="number" step="0.0001" value="0.002" oninput="if(currentAsset) updateRiskSizingHint(assets[currentAsset])"></div>
         </div>
         <div class="row">
           <div id="tpWrap"><label>TP distance (price units)</label><input id="inTP" type="number" step="0.0001" value="0.004"></div>
           <div><label>Min score to trade</label><input id="inMinScore" type="number" min="0" max="100" value="70"></div>
         </div>
+        <p class="small" id="riskSizingHint" style="margin-top:8px;"></p>
         <p class="small" id="bnAmountHint" hidden></p>
         <p class="small" id="bnNoSlTpNote" hidden>Binance BUY/SELL here are plain market orders — no automatic stop loss/take profit yet. Close manually or via the signal reversing.</p>
         <div class="row" style="margin-top:14px;">
@@ -719,6 +721,11 @@ function bnAddAsset(c){
   bnFetchFilters(assets[c.key]);
 }
 
+function addSymbolSearch(){
+  if(state.broker === 'binance') bnAddSymbolSearch();
+  else ctAddSymbolSearch();
+}
+
 async function bnAddSymbolSearch(){
   const statusEl = $('bnSearchStatus');
   let raw = $('bnSearchInput').value.trim().toUpperCase();
@@ -1037,23 +1044,48 @@ function indexSymbols(list){
     for(const m of c.match){ const s = symbolsByNorm[normName(m)]; if(s){ hit = s; break; } }
     if(!hit) return;
     found++;
-    assets[c.key] = {
-      key:c.key, label:c.label, name:c.name, bot:c.bot, defSL:c.defSL, defTP:c.defTP,
-      symbolId: hit.symbolId, full:null, lastPrice:null,
-      closes:[], emaFast:null, emaSlow:null, position:null
-    };
-    const card = document.createElement('div');
-    card.className = 'assetcard';
-    card.id = 'card_'+c.key;
-    card.onclick = () => openBot(c.key);
-    card.innerHTML = '<b>'+c.label+'</b><small>'+c.name+' · '+c.bot+'</small><div class="price" id="price_'+c.key+'">—</div>';
-    grid.appendChild(card);
-    send(PT.SYMBOL_BY_ID_REQ, {ctidTraderAccountId: state.accountId, symbolId:[hit.symbolId]});
-    send(PT.SUBSCRIBE_SPOTS_REQ, {ctidTraderAccountId: state.accountId, symbolId:[hit.symbolId]});
+    ctAddAsset(c.key, c.label, c.name, c.bot, hit.symbolId, c.defSL, c.defTP);
   });
   $('symStatus').textContent = found > 0
     ? (found + ' tradable instrument(s) found on this account.')
     : 'No matching forex/crypto instruments were found on this account. Check your broker\'s symbol list.';
+  $('bnSearchInput').placeholder = 'e.g. EURUSD or GBPJPY';
+  $('bnSearchRow').hidden = false;
+}
+
+function ctAddAsset(key, label, name, bot, symbolId, defSL, defTP){
+  assets[key] = {
+    key, label, name, bot, defSL, defTP,
+    symbolId, full:null, lastPrice:null,
+    closes:[], emaFast:null, emaSlow:null, position:null
+  };
+  const card = document.createElement('div');
+  card.className = 'assetcard';
+  card.id = 'card_'+key;
+  card.onclick = () => openBot(key);
+  card.innerHTML = '<b>'+label+'</b><small>'+name+' · '+bot+'</small><div class="price" id="price_'+key+'">—</div>';
+  $('assetGrid').appendChild(card);
+  send(PT.SYMBOL_BY_ID_REQ, {ctidTraderAccountId: state.accountId, symbolId:[symbolId]});
+  send(PT.SUBSCRIBE_SPOTS_REQ, {ctidTraderAccountId: state.accountId, symbolId:[symbolId]});
+}
+
+function ctAddSymbolSearch(){
+  const statusEl = $('bnSearchStatus');
+  const raw = $('bnSearchInput').value.trim();
+  if(!raw) return;
+  const hit = symbolsByNorm[normName(raw)];
+  if(!hit){
+    statusEl.textContent = 'No symbol matching "' + raw + '" found on this account.';
+    return;
+  }
+  if(assets[hit.symbolName]){
+    statusEl.textContent = hit.symbolName + ' is already in your list below.';
+    return;
+  }
+  const key = hit.symbolName;
+  ctAddAsset(key, hit.symbolName, hit.symbolName, hit.symbolName+'BOT', hit.symbolId, 0, 0);
+  statusEl.textContent = hit.symbolName + ' added below.';
+  $('bnSearchInput').value = '';
 }
 
 function applyFullSymbol(sym){
@@ -1216,14 +1248,16 @@ function openBot(key){
   const isBn = state.broker === 'binance';
   $('slWrap').hidden = isBn; $('tpWrap').hidden = isBn; $('bnNoSlTpNote').hidden = !isBn;
   $('bnAmountHint').hidden = !isBn;
+  $('volWrap').hidden = !isBn;
+  $('lotWrap').hidden = isBn;
   if(isBn){
-    $('volLabel').textContent = 'Trade amount (USDT)';
     $('inVolMult').value = a.full ? Math.max(1, a.full.minNotional) : 5;
     if(a.full) updateBnAmountHint(a); else $('bnAmountHint').textContent = 'Loading this pair\'s real Binance minimum...';
   } else {
-    $('volLabel').textContent = 'Volume (× broker min)';
-    $('inVolMult').value = 1;
+    const minLots = a.full && a.full.lotSize ? (a.full.minVolume / a.full.lotSize) : 0.01;
+    $('inLotSize').value = minLots.toFixed(2);
   }
+  updateRiskSizingHint(a);
   $('dashboard').hidden = true;
   $('botView').hidden = false;
   $('botLogs').innerHTML = '';
@@ -1279,6 +1313,7 @@ function updateRiskSetting(key, val){
 }
 function toggleRiskSizing(){
   state.risk.useRiskSizing = $('swRiskSizing').classList.toggle('on');
+  if(currentAsset) updateRiskSizingHint(assets[currentAsset]);
 }
 
 function toggleSwitch(which){
@@ -1335,16 +1370,22 @@ function ctExecuteTrade(a, side){
   const relTP = Math.round(tpDist*100000);
   const minVol = a.full ? a.full.minVolume : 1000;
   const step = a.full ? (a.full.stepVolume||minVol) : minVol;
+  // lotSize is the broker's own contract size for THIS symbol (units per lot, in cents,
+  // straight from cTrader — not a hardcoded "1 lot = 100,000" guess, since that's wrong
+  // for metals/indices/crypto CFDs). volume = lots * lotSize (both already in cents).
+  const lotSize = a.full && a.full.lotSize ? a.full.lotSize : 10000000; // 10,000,000 = standard 1.00 FX lot, used only if symbol data hasn't loaded yet
 
-  let volume;
+  let volume, lotsUsed;
   if(state.risk.useRiskSizing && slDist > 0){
     const riskDollars = state.balance * (state.risk.riskPct/100);
-    const rawVolume = (riskDollars * 100) / slDist;
+    const rawVolume = (riskDollars * 100) / slDist; // same approximation used for floating P&L elsewhere
     volume = Math.max(minVol, Math.round(rawVolume/step)*step);
   } else {
-    const volMult = parseInt($('inVolMult').value)||1;
-    volume = minVol + step*(volMult-1);
+    const lots = parseFloat($('inLotSize').value) || 0.01;
+    const rawVolume = lots * lotSize;
+    volume = Math.max(minVol, Math.round(rawVolume/step)*step);
   }
+  lotsUsed = volume / lotSize;
   const prospectiveRisk = slDist * volume/100;
 
   if(!riskGate(a, prospectiveRisk)) return;
@@ -1354,7 +1395,7 @@ function ctExecuteTrade(a, side){
     a.position = {side, entryPrice:a.lastPrice, volume, paper:true, floatingPnL:0,
       takeProfitPrice: side==='BUY' ? a.lastPrice+tpDist : a.lastPrice-tpDist,
       riskDollars: prospectiveRisk, beMoved:false};
-    log('[PAPER] '+side+' '+a.label+' vol='+volume+' @ '+a.lastPrice.toFixed(5)+' (risking ~$'+prospectiveRisk.toFixed(2)+')');
+    log('[PAPER] '+side+' '+a.label+' '+lotsUsed.toFixed(2)+' lots @ '+a.lastPrice.toFixed(5)+' (risking ~$'+prospectiveRisk.toFixed(2)+')');
     renderBotView(a);
     return;
   }
@@ -1370,7 +1411,27 @@ function ctExecuteTrade(a, side){
     comment: 'MorganAI',
     label: a.key
   });
-  log('Order sent: '+side+' '+a.label+' vol='+volume+' risking ~$'+prospectiveRisk.toFixed(2)+' (real order to '+state.env+' account)');
+  log('Order sent: '+side+' '+a.label+' '+lotsUsed.toFixed(2)+' lots, risking ~$'+prospectiveRisk.toFixed(2)+' (real order to '+state.env+' account)');
+}
+
+function updateRiskSizingHint(a){
+  const el = $('riskSizingHint');
+  if(!el) return;
+  if(!state.risk.useRiskSizing){ el.textContent = ''; return; }
+  if(state.broker === 'binance'){
+    const amt = state.balance * (state.risk.riskPct/100);
+    el.textContent = 'Risk-based sizing is on: next trade uses ~$' + amt.toFixed(2) + ' (' + state.risk.riskPct + '% of balance), not the field above.';
+  } else {
+    const slDist = parseFloat($('inSL').value) || a.defSL;
+    const lotSize = a.full && a.full.lotSize ? a.full.lotSize : 10000000;
+    if(slDist > 0 && state.balance > 0){
+      const riskDollars = state.balance * (state.risk.riskPct/100);
+      const lots = (riskDollars*100/slDist) / lotSize;
+      el.textContent = 'Risk-based sizing is on: next trade uses ~' + lots.toFixed(2) + ' lots (risking ~$' + riskDollars.toFixed(2) + '), not the field above.';
+    } else {
+      el.textContent = 'Risk-based sizing is on — lot size will be calculated automatically from your risk % and SL distance.';
+    }
+  }
 }
 
 function closeCurrentPosition(){
