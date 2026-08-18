@@ -248,7 +248,7 @@ a{color:var(--cyan);}
         </div>
         <div class="row" style="margin-top:10px;">
           <div><label>Strategy mode</label><select id="bnStrategyMode" onchange="setBnStrategyMode(this.value)"><option value="balanced">Balanced</option><option value="conservative">Conservative</option><option value="aggressive">Aggressive</option><option value="auto">Auto — adapt to conditions</option></select></div>
-          <div><label>Leverage (Futures)</label><select id="bnLeverage" onchange="setBnLeverage(this.value)"><option>1</option><option>2</option><option selected>3</option><option>5</option><option>10</option><option>20</option></select></div>
+          <div><label>Leverage (Futures)</label><select id="bnLeverage" onchange="setBnLeverage(this.value)"><option>1</option><option selected>2</option><option>3</option><option>5</option></select></div>
         </div>
         <div class="toggle" style="margin-top:10px;">
           <div><b>Fast execution</b><div class="small">Uses persistent market streams and only evaluates signals on candle updates. No artificial delay.</div></div>
@@ -404,15 +404,34 @@ const PT = {
 // Candidate instruments to look for on whatever broker/account connects.
 // Only ones actually found in the account's symbol list are shown.
 const TRADE_MODES = {
-  scalping:{label:'Scalping',desc:'Fast entries on M1/M5 with M15 trend confirmation.',trendTf:15,setupTf:5,entryTf:1,atrTf:1,atrSL:1.15,atrTP:1.75,minScore:82,streak:3,cooldownMs:2*60*1000,maxHoldMs:45*60*1000,rsiHigh:55,rsiLow:45,momentumMin:0.02,extension:1.6},
-  day:{label:'Day Trading',desc:'Intraday setups using M5/M15 with H1 direction.',trendTf:60,setupTf:15,entryTf:5,atrTf:5,atrSL:1.45,atrTP:2.25,minScore:78,streak:2,cooldownMs:15*60*1000,maxHoldMs:12*60*60*1000,rsiHigh:54,rsiLow:46,momentumMin:0.015,extension:2.0},
-  swing:{label:'Swing Trading',desc:'Multi-hour to multi-day setups using H4/H1 with M15 entries.',trendTf:60,setupTf:15,entryTf:5,atrTf:15,atrSL:1.8,atrTP:3.0,minScore:76,streak:2,cooldownMs:60*60*1000,maxHoldMs:3*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.01,extension:2.5},
-  position:{label:'Position Trading',desc:'Longer trend-following trades using H4/H1 structure and wider protection.',trendTf:60,setupTf:15,entryTf:15,atrTf:60,atrSL:2.2,atrTP:4.0,minScore:74,streak:2,cooldownMs:4*60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:52,rsiLow:48,momentumMin:0.005,extension:3.0}
+  // Fast does NOT mean blind: the scalp still requires higher-timeframe bias,
+  // setup agreement, acceptable spread/volatility and a live entry trigger.
+  scalping:{label:'Scalping',desc:'Fast live entries using M15 bias + M5 setup + live M1 trigger. Re-enters quickly after a completed trade.',trendTf:15,setupTf:5,entryTf:1,atrTf:1,atrSL:1.05,atrTP:1.45,minScore:80,streak:1,cooldownMs:5*1000,maxHoldMs:20*60*1000,rsiHigh:56,rsiLow:44,momentumMin:0.015,extension:1.8,liveEntry:true},
+  day:{label:'Day Trading',desc:'Fast intraday entries using H1 bias + M15 setup + live M5 trigger.',trendTf:60,setupTf:15,entryTf:5,atrTf:5,atrSL:1.35,atrTP:2.10,minScore:78,streak:1,cooldownMs:30*1000,maxHoldMs:12*60*60*1000,rsiHigh:55,rsiLow:45,momentumMin:0.012,extension:2.2,liveEntry:true},
+  swing:{label:'Swing Trading',desc:'Stronger multi-hour setups using H1/H4 context and M15/M5 entries.',trendTf:240,setupTf:60,entryTf:15,atrTf:15,atrSL:1.8,atrTP:3.0,minScore:76,streak:1,cooldownMs:10*60*1000,maxHoldMs:3*24*60*60*1000,rsiHigh:54,rsiLow:46,momentumMin:0.008,extension:2.7,liveEntry:true},
+  position:{label:'Position Trading',desc:'Longer trend-following entries using H4 bias + H1 setup + live H1 trigger.',trendTf:240,setupTf:60,entryTf:60,atrTf:60,atrSL:2.1,atrTP:3.8,minScore:74,streak:1,cooldownMs:60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.004,extension:3.2,liveEntry:true}
 };
 function mode(){ return TRADE_MODES[state.tradeMode] || TRADE_MODES.scalping; }
 function tfBars(a, tf){ return tf===1?a.bars1:tf===5?a.bars5:tf===15?a.bars15:tf===60?a.bars60:a.bars240; }
 function atrForTF(a, tf){ return atrSeries(tfBars(a,tf),14) || a.atr || 0; }
 function modeWarmupBars(m){ return m.trendTf>=60?50:25; }
+function liveBarsFor(a, tf){
+  const base=(tfBars(a,tf)||[]).slice();
+  const cur=a.currentBar;
+  if(!cur) return base;
+  if(tf===1) return base.concat([cur]);
+  // cTrader builds higher-timeframe bars from completed M1 bars. For fast entries,
+  // synthesize the currently forming higher-TF candle from recent M1 data + live tick.
+  // Binance already supplies live higher-TF klines, so avoid duplicating them.
+  if(state.broker==='binance') return base;
+  const mins=tf, bucket=Math.floor(cur.t/(mins*60000))*(mins*60000);
+  const src=(a.bars1||[]).filter(x=>x.t>=bucket).concat([cur]);
+  if(!src.length) return base;
+  const live={t:bucket,o:src[0].o,h:Math.max(...src.map(x=>x.h)),l:Math.min(...src.map(x=>x.l)),c:src[src.length-1].c};
+  if(base.length && base[base.length-1].t===bucket) base[base.length-1]=live;
+  else base.push(live);
+  return base;
+}
 
 const CANDIDATES = [
   {match:['BTCUSD','BTC/USD','BTCUSD.'], key:'BTCUSD', label:'BTC/USD', name:'Bitcoin', bot:'BTCBOT', defSL:60, defTP:120},
@@ -450,7 +469,7 @@ let state = {
 state.bnMarketMode = localStorage.getItem('morgan_bn_market') || 'spot';
 state.bnDirectionMode = localStorage.getItem('morgan_bn_direction') || (state.bnMarketMode==='futures'?'both':'long');
 state.bnStrategyMode = localStorage.getItem('morgan_bn_strategy') || 'balanced';
-state.bnLeverage = parseInt(localStorage.getItem('morgan_bn_leverage') || '3',10);
+state.bnLeverage = parseInt(localStorage.getItem('morgan_bn_leverage') || '2',10);
 state.bnProtection = localStorage.getItem('morgan_bn_protection') !== 'off';
 
 const savedMode=localStorage.getItem('morgan_trade_mode');
@@ -462,8 +481,6 @@ function resetDailyIfNeeded(){
     state.risk.dailyDateKey = k;
     state.risk.dailyLossUsed = 0;
     state.risk.dailyTradeCount = 0;
-    // consecutive-loss count deliberately does NOT reset at midnight — a losing
-    // streak that crosses into a new day is still a losing streak.
   }
 }
 function dailyLossLimitHit(){
@@ -994,6 +1011,9 @@ function bnSubscribe(a){
       a.lastBid=bid;a.lastAsk=ask;a.lastPrice=(bid+ask)/2;
       const pc=$('price_'+a.key);if(pc)pc.textContent=a.lastPrice.toFixed(a.full?a.full.digits:(a.lastPrice<1?6:a.lastPrice<100?4:2));
       if(a.position){updateFloatingPnL(a);checkBinanceProtection(a);}
+      // Fast execution: bookTicker is the execution heartbeat. The signal engine
+      // uses the latest live kline/current bar, while higher-timeframe context stays stable.
+      if(a.ready){ bnUpdateIndicators(a); maybeAutoTrade(a); }
       if(currentAsset===a.key)renderBotView(a);
     }else if(msg.e==='kline'&&msg.k){
       bnUpsertKline(a,msg.k.i,msg.k);
@@ -1459,26 +1479,28 @@ function directionForBars(bars){
 }
 function computeSignal(a){
   const m=mode();
-  const trendBars=tfBars(a,m.trendTf), setupBars=tfBars(a,m.setupTf), entryBars=tfBars(a,m.entryTf);
+  const trendBars=tfBars(a,m.trendTf)||[], setupBars=tfBars(a,m.setupTf)||[];
+  const entryBars=(m.liveEntry ? liveBarsFor(a,m.entryTf) : tfBars(a,m.entryTf))||[];
   const ready=trendBars.length>=50 && setupBars.length>=25 && entryBars.length>=25;
   if(!ready) return {direction:'WAIT',score:0,checks:[
     {label:'Warm-up for '+m.label,tag:'WAIT'},
     {label:'Trend ('+m.trendTf+'m)',tag:'WAIT'},
     {label:'Setup ('+m.setupTf+'m)',tag:'WAIT'},
-    {label:'Entry ('+m.entryTf+'m)',tag:'WAIT'},
+    {label:'Live entry ('+m.entryTf+'m)',tag:'WAIT'},
     {label:'Volatility / spread',tag:'WAIT'}
   ],tradeReady:false};
 
   const checks=[];
   const p=a.lastPrice, atr=atrForTF(a,m.atrTf);
-  const spreadPct=(a.lastBid&&a.lastAsk)?((a.lastAsk-a.lastBid)/p)*100:0;
+  const spreadPct=(a.lastBid&&a.lastAsk&&p)?((a.lastAsk-a.lastBid)/p)*100:0;
   const volOK=atr>0 && spreadPct<=state.risk.maxSpreadPct;
   const trend=directionForBars(trendBars);
   const setup=directionForBars(setupBars);
   const structure=structureFor(setupBars,Math.min(8,Math.max(4,Math.floor(setupBars.length/6))));
   const entryLiq=liquiditySignal(entryBars,atr);
   const ec=entryBars.map(x=>x.c), r=rsiSeries(ec,14);
-  const momBase=ec[Math.max(0,ec.length-6)];
+  const momLook=m.label==='Scalping'?4:6;
+  const momBase=ec[Math.max(0,ec.length-1-momLook)];
   const mom=momBase?((ec[ec.length-1]-momBase)/momBase)*100:0;
   const candle=entryBars[entryBars.length-1];
   const body=Math.abs(candle.c-candle.o), range=Math.max(candle.h-candle.l,atr*0.05);
@@ -1490,25 +1512,31 @@ function computeSignal(a){
 
   checks.push({label:'Trend ('+m.trendTf+'m)',tag:trend});
   checks.push({label:'Setup / structure ('+m.setupTf+'m)',tag:setup===structure?setup:structure==='RANGE'?'RANGE':'WAIT'});
-  checks.push({label:'Entry / liquidity ('+m.entryTf+'m)',tag:entryLiq});
+  checks.push({label:'Live entry / liquidity ('+m.entryTf+'m)',tag:entryLiq});
   checks.push({label:'Momentum',tag:momentumDir});
   checks.push({label:'RSI ('+(r==null?'—':r.toFixed(0))+')',tag:rsiDir});
   checks.push({label:'Volatility / spread',tag:volOK?'PASS':'BLOCK'});
   checks.push({label:'Entry extension',tag:extension<=m.extension?'PASS':'HIGH'});
 
   let direction='WAIT',score=0;
-  const structureOK=(structure===setup || structure==='RANGE');
-  const entryOK=(entryLiq===setup || (entryLiq==='WAIT' && candleDir===setup && body/range>=0.55));
-  if(trend!== 'WAIT' && trend===setup && structureOK && entryOK && volOK && extension<=m.extension){
-    direction=setup; score=48;
-    if(entryLiq===direction) score+=14;
-    if(momentumDir===direction) score+=10;
-    if(rsiDir===direction) score+=8;
-    if(candleDir===direction) score+=6;
-    if((direction==='BUY'&&r>50)||(direction==='SELL'&&r<50)) score+=4;
+  const trendOK=trend!=='WAIT' && trend===setup;
+  const structureOK=(structure===setup || (structure==='RANGE' && entryLiq===setup));
+  // Fast mode may enter on a genuine live momentum candle, but never on a weak
+  // candle/no-momentum combination. Liquidity sweep remains the strongest trigger.
+  const strongCandle=(body/range>=0.55 && candleDir===setup);
+  const liveMomentum=(momentumDir===setup && Math.abs(mom)>=m.momentumMin);
+  const entryOK=(entryLiq===setup) || (strongCandle && liveMomentum);
+
+  if(trendOK && structureOK && entryOK && volOK && extension<=m.extension){
+    direction=setup; score=52;
+    if(entryLiq===direction) score+=15;
+    if(liveMomentum) score+=10;
+    if(rsiDir===direction) score+=6;
+    if(candleDir===direction) score+=5;
+    if((direction==='BUY'&&r>50)||(direction==='SELL'&&r<50)) score+=3;
     const strength=trendStrength(trendBars);
-    if(strength>0.35) score+=5;
-    if(structure===direction) score+=5;
+    if(strength>0.30) score+=5;
+    if(structure===direction) score+=4;
   }
   if(!volOK || extension>m.extension) score=0;
   score=Math.max(0,Math.min(100,Math.round(score)));
@@ -1536,7 +1564,7 @@ function renderModeGrid(){
     grid.appendChild(d);
   });
   const m=mode();
-  const status=$('modeStatus'); if(status) status.textContent='ACTIVE: '+m.label+' · Trend '+m.trendTf+'m → Setup '+m.setupTf+'m → Entry '+m.entryTf+'m · Max hold '+formatHold(m.maxHoldMs)+' · Longer modes need more warm-up data.';
+  const status=$('modeStatus'); if(status) status.textContent='ACTIVE: '+m.label+' · Bias '+m.trendTf+'m → Setup '+m.setupTf+'m → LIVE trigger '+m.entryTf+'m · Max hold '+formatHold(m.maxHoldMs)+' · Fast mode evaluates live market updates; no artificial signal delay.';
 }
 function formatHold(ms){
   if(ms>=24*60*60*1000) return (ms/(24*60*60*1000)).toFixed(ms%(24*60*60*1000)?1:0)+'d';
@@ -1704,10 +1732,13 @@ function maybeAutoTrade(a){
   if(Date.now()-(a.lastLossAt||0)<m.cooldownMs) return;
 
   if(state.broker==='binance'){
-    if(!a.position && sig.direction==='BUY') bnExecuteTrade(a,'BUY');
-    else if(a.position && sig.direction==='SELL') bnExecuteTrade(a,'SELL');
+    // No forced flip: a new trade is only opened after the existing position is
+    // actually closed. This prevents rapid churn while still allowing immediate
+    // re-entry once a fresh setup appears.
+    if(!a.position && (sig.direction==='BUY'||sig.direction==='SELL')) bnExecuteTrade(a,sig.direction);
+    else if(a.position && sig.direction!==a.position.side && (sig.direction==='BUY'||sig.direction==='SELL')) bnExecuteTrade(a,sig.direction);
   } else {
-    if(!a.position) ctExecuteTrade(a,sig.direction);
+    if(!a.position && (sig.direction==='BUY'||sig.direction==='SELL')) ctExecuteTrade(a,sig.direction);
   }
 }
 
@@ -1980,22 +2011,18 @@ async function runSelectedBacktest(){
 
 function recordResult(pnlAmount, isPaper, modeKey){
   const won = pnlAmount >= 0;
-  if(won){
-    state.wins++; $('stWins').textContent = state.wins;
-    state.risk.consecutiveLosses = 0;
-  }
+  if(won){ state.wins++; $('stWins').textContent = state.wins; }
   else {
     state.losses++; $('stLosses').textContent = state.losses;
     if(currentAsset && assets[currentAsset]) assets[currentAsset].lastLossAt = Date.now();
     resetDailyIfNeeded();
     state.risk.dailyLossUsed += Math.abs(pnlAmount);
-    state.risk.consecutiveLosses++;
   }
   if(isPaper){
     if(state.paperBalance == null) state.paperBalance = state.balance;
     state.paperBalance += pnlAmount;
-    const modeKey=modeKey || (currentAsset && assets[currentAsset] && assets[currentAsset].position ? assets[currentAsset].position.mode : state.tradeMode);
-    const st=ensurePaperModeStats(modeKey || state.tradeMode);
+    const resolvedModeKey = modeKey || (currentAsset && assets[currentAsset] && assets[currentAsset].position ? assets[currentAsset].position.mode : state.tradeMode);
+    const st=ensurePaperModeStats(resolvedModeKey || state.tradeMode);
     st.trades++; st.pnl+=pnlAmount;
     if(pnlAmount>0){ st.wins++; st.profit+=pnlAmount; } else if(pnlAmount<0){ st.losses++; st.loss+=Math.abs(pnlAmount); }
     st.equity+=pnlAmount; st.peak=Math.max(st.peak,st.equity); st.maxDD=Math.max(st.maxDD,st.peak-st.equity);
@@ -2007,10 +2034,7 @@ function recordResult(pnlAmount, isPaper, modeKey){
     const base = isPaper ? state.paperBalance : state.balance;
     const cap = base * (state.risk.dailyLossLimitPct/100);
     dl.textContent = 'Daily loss used: $' + state.risk.dailyLossUsed.toFixed(2) + ' of $' + cap.toFixed(2) + ' limit'
-      + ' · Trades today: ' + state.risk.dailyTradeCount + '/' + state.risk.maxTradesPerDay
-      + ' · Losing streak: ' + state.risk.consecutiveLosses + '/' + state.risk.maxConsecutiveLosses
-      + (dailyLossLimitHit() ? ' — DAILY LOSS LIMIT REACHED.' : '')
-      + (dailyTradeCapHit() ? ' — TRADE LIMIT REACHED.' : '');
+      + (dailyLossLimitHit() ? ' — LIMIT REACHED, trading paused today.' : '');
   }
 }
 
@@ -2039,7 +2063,7 @@ function setBnDirectionMode(v){
   state.bnDirectionMode=v;localStorage.setItem('morgan_bn_direction',v);syncBnControls();
 }
 function setBnStrategyMode(v){state.bnStrategyMode=v;localStorage.setItem('morgan_bn_strategy',v);syncBnControls();}
-function setBnLeverage(v){state.bnLeverage=Math.max(1,Math.min(20,parseInt(v,10)||3));localStorage.setItem('morgan_bn_leverage',String(state.bnLeverage));syncBnControls();}
+function setBnLeverage(v){state.bnLeverage=Math.max(1,Math.min(5,parseInt(v,10)||2));localStorage.setItem('morgan_bn_leverage',String(state.bnLeverage));syncBnControls();}
 function effectiveModeForBinance(){
   const base=_origMode();
   if(state.bnStrategyMode==='conservative')return Object.assign({},base,{minScore:Math.min(100,mode().minScore+7),streak:Math.max(2,mode().streak+1)});
