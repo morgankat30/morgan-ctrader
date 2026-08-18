@@ -79,6 +79,12 @@ button{font-family:'Rajdhani',sans-serif; font-weight:700; letter-spacing:.5px; 
 .logs{background:#020504; border:1px solid var(--line); border-radius:10px; padding:10px; height:200px; overflow-y:auto; font-size:12px; font-family:monospace; color:#7feccb;}
 .logs div{margin-bottom:4px; opacity:.9;}
 .logs .t{color:var(--dim); margin-right:6px;}
+.modegrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;}
+.modecard{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px;cursor:pointer;}
+.modecard.active{border-color:var(--cyan);box-shadow:0 0 0 1px rgba(34,211,238,.15);}
+.modecard b{display:block;font-size:14px;}
+.modecard small{display:block;color:var(--dim);margin-top:4px;line-height:1.35;}
+.modebadge{display:inline-block;border:1px solid var(--cyan);color:var(--cyan);border-radius:999px;padding:3px 8px;font-size:10px;letter-spacing:1px;margin-top:7px;}
 .posbox{border:1px solid var(--cyan); border-radius:10px; padding:12px; margin-top:12px; background:rgba(34,211,238,.05);}
 footer.tabs{position:fixed; bottom:0; left:0; right:0; background:var(--panel); border-top:1px solid var(--line); display:flex; max-width:520px; margin:0 auto;}
 footer.tabs button{flex:1; background:none; border:none; color:var(--dim); padding:12px 0; font-size:12px; border-radius:0;}
@@ -184,7 +190,7 @@ a{color:var(--cyan);}
         <h2>Setup steps</h2>
         <p class="small">
           1. Open <a href="https://testnet.binance.vision/" target="_blank">testnet.binance.vision</a>, log in with GitHub, generate an HMAC API key — instant, no approval, use this to try everything risk-free first.<br>
-          2. For real trading later: on the real Binance app/site go to <b>Profile → API Management → Create API</b>, enable "Enable Spot Trading" only (leave withdrawals off), and restrict it if you can. Binance requires standard account KYC for live trading, separate from this API step.<br>
+          2. For real trading later: on the real Binance app/site go to <b>Profile → API Management → Create API</b>, enable the required Spot and/or Futures trading permission only (leave withdrawals off), and restrict it if you can. Binance requires standard account KYC for live trading, separate from this API step.<br>
           3. Paste the API Key and Secret above.<br>
           4. Download <code>binance_relay.py</code> (link provided separately), run <code>python3 binance_relay.py</code> in Termux in this project's folder, and open this page through <b>http://localhost:8788/index.html</b> (not the https GitHub link) whenever you want real orders to actually go through — the relay only works when the page and script are on the same device.<br>
           5. Tap Connect. Start on Testnet.
@@ -227,6 +233,51 @@ a{color:var(--cyan);}
       </div>
 
       <div class="panel">
+        <h2>Trading style</h2>
+        <p class="small">Choose how Morgan AI should trade. The selected style changes the analysis timeframes, entry strictness, volatility-based protection, cooldown and maximum holding time for every supported pair.</p>
+        <div class="modegrid" id="modeGrid"></div>
+        <p class="small" id="modeStatus" style="margin-top:10px;"></p>
+      </div>
+
+      <div class="panel" id="binanceControlPanel" hidden>
+        <h2>Binance trading controls</h2>
+        <p class="small">Everything below is part of the Binance bot. Choose the market, direction and style; Morgan automatically switches its analysis and execution rules.</p>
+        <div class="row">
+          <div><label>Market</label><select id="bnMarketMode" onchange="setBnMarketMode(this.value)"><option value="spot">Spot</option><option value="futures">Futures — Long & Short</option></select></div>
+          <div><label>Direction</label><select id="bnDirectionMode" onchange="setBnDirectionMode(this.value)"><option value="both">Long + Short</option><option value="long">Long only</option><option value="short">Short only</option></select></div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <div><label>Strategy mode</label><select id="bnStrategyMode" onchange="setBnStrategyMode(this.value)"><option value="balanced">Balanced</option><option value="conservative">Conservative</option><option value="aggressive">Aggressive</option><option value="auto">Auto — adapt to conditions</option></select></div>
+          <div><label>Leverage (Futures)</label><select id="bnLeverage" onchange="setBnLeverage(this.value)"><option>1</option><option>2</option><option selected>3</option><option>5</option><option>10</option><option>20</option></select></div>
+        </div>
+        <div class="toggle" style="margin-top:10px;">
+          <div><b>Fast execution</b><div class="small">Uses persistent market streams and only evaluates signals on candle updates. No artificial delay.</div></div>
+          <div class="switch on" id="swBnFast"></div>
+        </div>
+        <div class="toggle">
+          <div><b>Auto SL/TP + trailing protection</b><div class="small">Futures protective orders are placed on Binance after entry; the browser also monitors the position.</div></div>
+          <div class="switch on" id="swBnProtection"></div>
+        </div>
+        <div class="warn-box" id="bnMarketWarning">Spot mode cannot short. Select Futures + Long/Short if you want Morgan to profit from downward moves.</div>
+        <p class="small" id="bnModeStatus" style="margin-top:8px;"></p>
+      </div>
+
+      <div class="panel">
+        <h2>Performance Lab</h2>
+        <p class="small">Test the selected trading style on the currently loaded pair before using live execution. Backtests use the bot's actual signal engine, ATR protection and holding rules. Results are estimates, not guarantees.</p>
+        <div class="row">
+          <div><label>Backtest history</label><select id="backtestBars"><option value="200">200 bars</option><option value="500" selected>500 bars</option><option value="1000">1000 bars</option></select></div>
+          <div><label>Estimated spread (%)</label><input id="backtestSpread" type="number" step="0.001" min="0" value="0.01"></div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <button class="btn-ghost" onclick="runSelectedBacktest()">RUN BACKTEST</button>
+          <button class="btn-ghost" onclick="resetPaperStats()">RESET PAPER STATS</button>
+        </div>
+        <div id="backtestResult" class="small" style="margin-top:10px;line-height:1.6;"></div>
+        <div id="paperStatsResult" class="small" style="margin-top:10px;line-height:1.6;"></div>
+      </div>
+
+      <div class="panel">
         <h2>Risk management</h2>
         <p class="small">Execution itself is already immediate — market orders on live ticks, no artificial delay. These settings control how much gets risked per trade, not how fast orders fire.</p>
         <div class="toggle">
@@ -242,7 +293,11 @@ a{color:var(--cyan);}
           <div><label>Breakeven trigger (%)</label><input id="inBreakeven" type="number" step="0.1" min="0.05" value="0.3" onchange="updateRiskSetting('breakevenTriggerPct', this.value)"></div>
         </div>
         <div class="row" style="margin-top:10px;">
-          <div><label>Max spread (%)</label><input id="inMaxSpread" type="number" step="0.01" min="0.01" value="0.08" onchange="updateRiskSetting('maxSpreadPct', this.value)"></div>
+          <div><label>Max spread (%)</label><input id="inMaxSpread" type="number" step="0.01" min="0.001" value="0.03" onchange="updateRiskSetting('maxSpreadPct', this.value)"></div>
+          <div><label>Max trades per day</label><input id="inMaxTrades" type="number" step="1" min="1" value="10" onchange="updateRiskSetting('maxTradesPerDay', this.value)"></div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <div><label>Max losses in a row</label><input id="inMaxConsecLoss" type="number" step="1" min="1" value="3" onchange="updateRiskSetting('maxConsecutiveLosses', this.value)"></div>
           <div></div>
         </div>
         <p class="small" id="dailyLossStatus" style="margin-top:8px;"></p>
@@ -282,6 +337,11 @@ a{color:var(--cyan);}
 
       <div class="panel">
         <h2>Trade size &amp; protection</h2>
+        <div class="toggle">
+          <div><b>Mode-managed protection</b><div class="small">Automatically uses the selected style's ATR-based SL/TP for this pair. Turn off only if you want custom distances.</div></div>
+          <div class="switch on" id="swModeProtection" onclick="toggleModeProtection()"></div>
+        </div>
+        <p class="small" id="modePlanHint" style="margin-top:8px;"></p>
         <div class="row">
           <div id="volWrap"><label id="volLabel">Trade amount (USDT)</label><input id="inVolMult" type="number" min="1" value="1"></div>
           <div id="lotWrap" hidden><label>Lot size</label><input id="inLotSize" type="number" step="0.01" min="0.01" value="0.01"></div>
@@ -289,7 +349,7 @@ a{color:var(--cyan);}
         </div>
         <div class="row">
           <div id="tpWrap"><label>TP distance (price units)</label><input id="inTP" type="number" step="0.0001" value="0.004"></div>
-          <div><label>Min score to trade</label><input id="inMinScore" type="number" min="0" max="100" value="70"></div>
+          <div><label>Min score to trade</label><input id="inMinScore" type="number" min="0" max="100" value="75"></div>
         </div>
         <p class="small" id="riskSizingHint" style="margin-top:8px;"></p>
         <p class="small" id="bnAmountHint" hidden></p>
@@ -343,6 +403,17 @@ const PT = {
 
 // Candidate instruments to look for on whatever broker/account connects.
 // Only ones actually found in the account's symbol list are shown.
+const TRADE_MODES = {
+  scalping:{label:'Scalping',desc:'Fast entries on M1/M5 with M15 trend confirmation.',trendTf:15,setupTf:5,entryTf:1,atrTf:1,atrSL:1.15,atrTP:1.75,minScore:82,streak:3,cooldownMs:2*60*1000,maxHoldMs:45*60*1000,rsiHigh:55,rsiLow:45,momentumMin:0.02,extension:1.6},
+  day:{label:'Day Trading',desc:'Intraday setups using M5/M15 with H1 direction.',trendTf:60,setupTf:15,entryTf:5,atrTf:5,atrSL:1.45,atrTP:2.25,minScore:78,streak:2,cooldownMs:15*60*1000,maxHoldMs:12*60*60*1000,rsiHigh:54,rsiLow:46,momentumMin:0.015,extension:2.0},
+  swing:{label:'Swing Trading',desc:'Multi-hour to multi-day setups using H4/H1 with M15 entries.',trendTf:60,setupTf:15,entryTf:5,atrTf:15,atrSL:1.8,atrTP:3.0,minScore:76,streak:2,cooldownMs:60*60*1000,maxHoldMs:3*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.01,extension:2.5},
+  position:{label:'Position Trading',desc:'Longer trend-following trades using H4/H1 structure and wider protection.',trendTf:60,setupTf:15,entryTf:15,atrTf:60,atrSL:2.2,atrTP:4.0,minScore:74,streak:2,cooldownMs:4*60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:52,rsiLow:48,momentumMin:0.005,extension:3.0}
+};
+function mode(){ return TRADE_MODES[state.tradeMode] || TRADE_MODES.scalping; }
+function tfBars(a, tf){ return tf===1?a.bars1:tf===5?a.bars5:tf===15?a.bars15:tf===60?a.bars60:a.bars240; }
+function atrForTF(a, tf){ return atrSeries(tfBars(a,tf),14) || a.atr || 0; }
+function modeWarmupBars(m){ return m.trendTf>=60?50:25; }
+
 const CANDIDATES = [
   {match:['BTCUSD','BTC/USD','BTCUSD.'], key:'BTCUSD', label:'BTC/USD', name:'Bitcoin', bot:'BTCBOT', defSL:60, defTP:120},
   {match:['ETHUSD','ETH/USD'], key:'ETHUSD', label:'ETH/USD', name:'Ethereum', bot:'ETHBOT', defSL:5, defTP:10},
@@ -357,28 +428,55 @@ const CANDIDATES = [
 
 let state = {
   broker:'ctrader',
+  tradeMode:'scalping',
+  modeProtection:true,
   clientId:'', clientSecret:'', accessToken:'', refreshToken:'',
   env:'demo', accountId:null, moneyDigits:2,
   connected:false, accountReady:false,
   paper:true, armed:false, auto:false, stopped:false,
   wins:0, losses:0, balance:0, equity:0, paperBalance:null,
+  paperStats: JSON.parse(localStorage.getItem('morgan_paper_stats') || '{}'),
   risk:{
-    riskPct:1, dailyLossLimitPct:3, portfolioRiskCapPct:5,
+    riskPct:0.5, dailyLossLimitPct:2, portfolioRiskCapPct:3,
     breakevenTriggerPct:0.3, maxSpreadPct:0.08,
     useRiskSizing:true,
-    dailyLossUsed:0, dailyDateKey:''
+    dailyLossUsed:0, dailyDateKey:'',
+    maxTradesPerDay:10, dailyTradeCount:0,
+    maxConsecutiveLosses:3, consecutiveLosses:0
   }
 };
 
+// Binance configuration is part of the same bot, not a separate engine.
+state.bnMarketMode = localStorage.getItem('morgan_bn_market') || 'spot';
+state.bnDirectionMode = localStorage.getItem('morgan_bn_direction') || (state.bnMarketMode==='futures'?'both':'long');
+state.bnStrategyMode = localStorage.getItem('morgan_bn_strategy') || 'balanced';
+state.bnLeverage = parseInt(localStorage.getItem('morgan_bn_leverage') || '3',10);
+state.bnProtection = localStorage.getItem('morgan_bn_protection') !== 'off';
+
+const savedMode=localStorage.getItem('morgan_trade_mode');
+if(savedMode && TRADE_MODES[savedMode]) state.tradeMode=savedMode;
 function todayKey(){ return new Date().toISOString().slice(0,10); }
 function resetDailyIfNeeded(){
   const k = todayKey();
-  if(state.risk.dailyDateKey !== k){ state.risk.dailyDateKey = k; state.risk.dailyLossUsed = 0; }
+  if(state.risk.dailyDateKey !== k){
+    state.risk.dailyDateKey = k;
+    state.risk.dailyLossUsed = 0;
+    state.risk.dailyTradeCount = 0;
+    // consecutive-loss count deliberately does NOT reset at midnight — a losing
+    // streak that crosses into a new day is still a losing streak.
+  }
 }
 function dailyLossLimitHit(){
   resetDailyIfNeeded();
   const cap = state.balance * (state.risk.dailyLossLimitPct/100);
   return cap > 0 && state.risk.dailyLossUsed >= cap;
+}
+function dailyTradeCapHit(){
+  resetDailyIfNeeded();
+  return state.risk.maxTradesPerDay > 0 && state.risk.dailyTradeCount >= state.risk.maxTradesPerDay;
+}
+function consecutiveLossCapHit(){
+  return state.risk.maxConsecutiveLosses > 0 && state.risk.consecutiveLosses >= state.risk.maxConsecutiveLosses;
 }
 function currentPortfolioRiskDollars(){
   let total = 0;
@@ -403,6 +501,21 @@ function riskGate(a, prospectiveRiskDollars){
     log('Blocked: daily loss limit reached ($' + state.risk.dailyLossUsed.toFixed(2) + '). Trading paused until tomorrow.');
     return false;
   }
+  if(dailyTradeCapHit()){
+    log('Blocked: max trades for today reached (' + state.risk.dailyTradeCount + '/' + state.risk.maxTradesPerDay + '). Trading paused until tomorrow.');
+    return false;
+  }
+  if(consecutiveLossCapHit()){
+    if(!state.stopped){
+      state.stopped = true;
+      state.auto = false;
+      const swAuto = $('swAuto'); if(swAuto) swAuto.classList.remove('on');
+      const btn = $('btnStopAll'); if(btn) btn.textContent = '▶ RESUME TRADING';
+      const status = $('stopStatus'); if(status) status.textContent = state.risk.consecutiveLosses + ' losses in a row (limit ' + state.risk.maxConsecutiveLosses + ') — trading auto-stopped. Review what happened, then tap RESUME TRADING when ready.';
+    }
+    log('Blocked: ' + state.risk.consecutiveLosses + ' losses in a row (limit ' + state.risk.maxConsecutiveLosses + '). Auto-stopped — tap RESUME TRADING on the dashboard to continue.');
+    return false;
+  }
   if(!spreadOk(a)){
     const spreadPct = ((a.lastAsk - a.lastBid) / a.lastPrice) * 100;
     log('Blocked: spread too wide right now (' + spreadPct.toFixed(3) + '% > ' + state.risk.maxSpreadPct + '% limit).');
@@ -414,6 +527,8 @@ function riskGate(a, prospectiveRiskDollars){
     log('Blocked: would exceed portfolio risk cap ($' + current.toFixed(2) + ' open + $' + prospectiveRiskDollars.toFixed(2) + ' new > $' + cap.toFixed(2) + ' cap).');
     return false;
   }
+  resetDailyIfNeeded();
+  state.risk.dailyTradeCount++;
   return true;
 }
 const BINANCE_CANDIDATES = [
@@ -649,6 +764,8 @@ async function bnConnect(){
     setBadge(state.bnEnv === 'live' ? 'BINANCE LIVE · CONNECTED' : 'BINANCE TESTNET · CONNECTED', state.bnEnv === 'live' ? 'live' : 'demo');
     bnIndexSymbols();
     showDashboard();
+    const bcp=$('binanceControlPanel'); if(bcp) bcp.hidden=false;
+    syncBnControls();
   } catch(e){
     setBadge('CONNECTION ERROR', 'off');
     alert('Could not reach the relay at ' + state.bnRelayUrl + '. Is binance_relay.py running in Termux, and are you opening this page from http://localhost:8788 (not the https link)? Balance/price viewing still needs the relay reachable at least once to confirm your keys.');
@@ -659,25 +776,27 @@ async function bnRelayCall(path, body){
   const res = await fetch(state.bnRelayUrl + path, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(Object.assign({apiKey: state.bnApiKey, apiSecret: state.bnApiSecret, testnet: state.bnEnv !== 'live'}, body))
+    body: JSON.stringify(Object.assign({apiKey: state.bnApiKey, apiSecret: state.bnApiSecret, testnet: state.bnEnv !== 'live', market: state.bnMarketMode || 'spot'}, body))
   });
   return res.json();
 }
 
 function bnApplyAccount(acct){
   const statusEl = $('balanceStatus');
-  if(!acct || !acct.balances){
-    if(statusEl) statusEl.textContent = 'Could not read balances: ' + JSON.stringify(acct).slice(0,150);
-    return;
+  if(state.bnMarketMode==='futures'){
+    if(!acct || acct.error){ if(statusEl) statusEl.textContent='Could not read Futures account: '+JSON.stringify(acct).slice(0,180); return; }
+    const asset=(acct.assets||[]).find(x=>x.asset==='USDT');
+    state.balance=asset ? parseFloat(asset.walletBalance||asset.balance||0) : parseFloat(acct.totalWalletBalance||0);
+    state.equity=asset ? parseFloat(asset.marginBalance||asset.walletBalance||0) : parseFloat(acct.totalMarginBalance||state.balance);
+    if(statusEl) statusEl.textContent='Binance Futures · USDT margin · updated '+new Date().toLocaleTimeString();
+  } else {
+    if(!acct || !acct.balances){ if(statusEl) statusEl.textContent='Could not read Spot balances: '+JSON.stringify(acct).slice(0,150); return; }
+    const usdt=acct.balances.find(b=>b.asset==='USDT');
+    state.balance=usdt ? parseFloat(usdt.free)+parseFloat(usdt.locked) : 0;
+    state.equity=state.balance;
+    if(statusEl) statusEl.textContent=usdt?'Binance Spot · updated '+new Date().toLocaleTimeString():'No USDT found in Spot.';
   }
-  const usdt = acct.balances.find(b => b.asset === 'USDT');
-  if(!usdt){
-    if(statusEl) statusEl.textContent = 'No USDT found in Spot — check funds are in Spot, not Funding/Earn/Futures.';
-  } else if(statusEl){
-    statusEl.textContent = 'Last updated ' + new Date().toLocaleTimeString();
-  }
-  state.balance = usdt ? parseFloat(usdt.free) + parseFloat(usdt.locked) : 0;
-  if(state.paperBalance == null) state.paperBalance = state.balance;
+  if(state.paperBalance==null) state.paperBalance=state.balance;
   updateBalanceDisplay();
 }
 
@@ -712,10 +831,17 @@ function bnIndexSymbols(){
 }
 
 function bnAddAsset(c){
+  // Binance Spot is long-only in this build. Market data is real-time, while
+  // strategy calculations use actual Binance candles rather than treating every
+  // book-ticker update as a new candle.
   assets[c.key] = {
     key:c.key, label:c.label, name:c.name, bot:c.bot, defSL:c.defSL, defTP:c.defTP,
-    symbol:c.symbol, full:null, lastPrice:null,
-    closes:[], emaFast:null, emaSlow:null, position:null
+    symbol:c.symbol, full:null, lastPrice:null, lastBid:null, lastAsk:null,
+    closes:[], emaFast:null, emaSlow:null, position:null,
+    bars1:[], bars5:[], bars15:[], bars60:[], bars240:[],
+    currentBar:null, signalStreak:0, lastStableDirection:'WAIT',
+    lastTradeAt:0, lastLossAt:0, lastSignal:null, dataReady:false,
+    lastKlineUpdate:0, pendingOrder:false
   };
   const card = document.createElement('div');
   card.className = 'assetcard';
@@ -723,8 +849,14 @@ function bnAddAsset(c){
   card.onclick = () => openBot(c.key);
   card.innerHTML = '<b>'+c.label+'</b><small>'+c.name+' · '+c.bot+'</small><div class="price" id="price_'+c.key+'">—</div>';
   $('assetGrid').appendChild(card);
-  bnSubscribe(assets[c.key]);
-  bnFetchFilters(assets[c.key]);
+
+  const a = assets[c.key];
+  bnFetchFilters(a);
+  bnSeedHistory(a).finally(() => {
+    a.dataReady = true;
+    renderBotView(a);
+  });
+  bnSubscribe(a);
 }
 
 function addSymbolSearch(){
@@ -745,7 +877,7 @@ async function bnAddSymbolSearch(){
     const info = await bnRelayCall('/api/binance/exchangeInfo', {symbol});
     const sym = info.symbols && info.symbols[0];
     if(!sym || sym.status !== 'TRADING'){
-      statusEl.textContent = symbol + ' isn\'t a tradable Binance pair right now (checked spot only).';
+      statusEl.textContent = symbol + ' isn\'t a tradable Binance pair right now (checked for the selected Binance market).';
       return;
     }
     const base = sym.baseAsset;
@@ -763,18 +895,14 @@ async function bnAddSymbolSearch(){
 
 async function bnFetchFilters(a){
   try{
-    const info = await bnRelayCall('/api/binance/exchangeInfo', {symbol: a.symbol});
-    const sym = info.symbols && info.symbols[0];
-    if(!sym) return;
-    const lot = sym.filters.find(f => f.filterType === 'LOT_SIZE');
-    const notional = sym.filters.find(f => f.filterType === 'NOTIONAL' || f.filterType === 'MIN_NOTIONAL');
-    a.full = {
-      minQty: lot ? parseFloat(lot.minQty) : 0.0001,
-      stepSize: lot ? parseFloat(lot.stepSize) : 0.0001,
-      minNotional: notional ? parseFloat(notional.minNotional) : 5
-    };
-    if(currentAsset === a.key) updateBnAmountHint(a);
-  } catch(e){ /* keep defaults, order attempt will still surface a clear error */ }
+    const info=await bnRelayCall('/api/binance/exchangeInfo',{symbol:a.symbol});
+    const sym=info.symbols&&info.symbols[0]; if(!sym) return;
+    const lot=(sym.filters||[]).find(f=>f.filterType==='LOT_SIZE' || f.filterType==='MARKET_LOT_SIZE');
+    const notional=(sym.filters||[]).find(f=>f.filterType==='NOTIONAL'||f.filterType==='MIN_NOTIONAL');
+    const price=(sym.filters||[]).find(f=>f.filterType==='PRICE_FILTER');
+    a.full={minQty:lot?parseFloat(lot.minQty):0.0001,stepSize:lot?parseFloat(lot.stepSize):0.0001,minNotional:notional?parseFloat(notional.minNotional):5,digits:price?Math.max(0,Math.round(-Math.log10(parseFloat(price.tickSize||'0.01')))):5};
+    if(currentAsset===a.key) updateBnAmountHint(a);
+  }catch(e){ log('Binance filters failed for '+a.label+': '+e.message); }
 }
 
 function updateBnAmountHint(a){
@@ -784,50 +912,115 @@ function updateBnAmountHint(a){
   el.textContent = 'This pair\'s real minimum on Binance is $' + min.toFixed(2) + ' per order — amounts below that are automatically raised to it.';
 }
 
-function bnSubscribe(a){
-  const host = state.bnEnv === 'live' ? 'wss://stream.binance.com:9443' : 'wss://testnet.binance.vision';
-  const stream = a.symbol.toLowerCase() + '@bookTicker';
-  const sock = new WebSocket(host + '/ws/' + stream);
-  sock.onmessage = (ev) => {
-    let msg; try{ msg = JSON.parse(ev.data); } catch(e){ return; }
-    const bid = parseFloat(msg.b), ask = parseFloat(msg.a);
-    if(!bid || !ask) return;
-    a.lastBid = bid; a.lastAsk = ask;
-    const mid = (bid+ask)/2;
-    a.lastPrice = mid;
-    const pc = $('price_'+a.key); if(pc) pc.textContent = mid.toFixed(mid < 1 ? 6 : (mid < 100 ? 4 : 2));
-    a.closes.push(mid);
-    if(a.closes.length > 400) a.closes.shift();
-    updateIndicators(a, true); // faster-tuned periods for crypto
-    if(a.position){ updateFloatingPnL(a); checkBreakevenBinance(a); }
-    if(currentAsset === a.key) renderBotView(a);
-    maybeAutoTrade(a);
+async function bnSeedHistory(a){
+  const intervals = ['1m','5m','15m','1h','4h'];
+  try{
+    const results = await Promise.all(intervals.map(async interval => {
+      const res = await bnRelayCall('/api/binance/klines', {symbol:a.symbol, interval, limit:1000});
+      return {interval, res};
+    }));
+    results.forEach(({interval,res})=>{
+      if(!Array.isArray(res)) return;
+      const bars = res.map(k=>({
+        t:Number(k[0]), o:parseFloat(k[1]), h:parseFloat(k[2]),
+        l:parseFloat(k[3]), c:parseFloat(k[4]), v:parseFloat(k[5]||0),
+        closed:true
+      }));
+      if(interval==='1m') a.bars1=bars;
+      else if(interval==='5m') a.bars5=bars;
+      else if(interval==='15m') a.bars15=bars;
+      else if(interval==='1h') a.bars60=bars;
+      else if(interval==='4h') a.bars240=bars;
+    });
+    const c=a.bars1.map(x=>x.c);
+    a.closes=c.slice(-300);
+    bnUpdateIndicators(a);
+  }catch(e){
+    log('Binance history warm-up failed for '+a.label+': '+e.message);
+  }
+}
+
+function bnUpsertKline(a, interval, k){
+  const bar={
+    t:Number(k.t), o:parseFloat(k.o), h:parseFloat(k.h),
+    l:parseFloat(k.l), c:parseFloat(k.c), v:parseFloat(k.v||0),
+    closed:!!k.x
   };
-  sock.onerror = () => { log('Price stream error for '+a.label+'.'); };
-  bnSockets[a.key] = sock;
+  const target=interval==='1m'?a.bars1:interval==='5m'?a.bars5:interval==='15m'?a.bars15:interval==='1h'?a.bars60:a.bars240;
+  const last=target[target.length-1];
+  if(!last || last.t!==bar.t) target.push(bar); else target[target.length-1]=bar;
+  if(target.length>250) target.splice(0,target.length-250);
+  if(interval==='1m'){
+    a.closes=target.map(x=>x.c).slice(-300);
+    a.lastKlineUpdate=Date.now();
+    bnUpdateIndicators(a);
+  }
 }
 
-function checkBreakevenBinance(a){
-  const pos = a.position;
-  if(!pos || pos.paper || !pos.entryPrice) return;
-  const moveFavorPct = pos.side === 'BUY'
-    ? ((a.lastPrice - pos.entryPrice) / pos.entryPrice) * 100
-    : ((pos.entryPrice - a.lastPrice) / pos.entryPrice) * 100;
+function bnUpdateIndicators(a){
+  // Reuse the multi-timeframe engine from Morgan V3, but only after Binance
+  // candle data is present. This avoids the old "every tick is a candle" bug.
+  const m=mode();
+  const trendBars=tfBars(a,m.trendTf), setupBars=tfBars(a,m.setupTf), entryBars=tfBars(a,m.entryTf);
+  a.ready=trendBars.length>=50 && setupBars.length>=25 && entryBars.length>=25;
+  if(!a.ready) return;
+  a.atr=atrForTF(a,m.atrTf);
+  a.rsi=rsiSeries(a.bars1.map(x=>x.c),14);
+  a.structure=structureFor(a.bars5,6);
+  const c=a.bars1.map(x=>x.c);
+  const back=c[Math.max(0,c.length-6)];
+  a.momentum=back?((c[c.length-1]-back)/back)*100:0;
+  a.trend5=directionForBars(a.bars5);
+  a.trend15=directionForBars(a.bars15);
+  a.structure15=structureFor(a.bars15,5);
+  a.liquidity=liquiditySignal(a.bars1,a.atr);
+}
 
-  if(!pos.beArmed && moveFavorPct >= state.risk.breakevenTriggerPct){
-    pos.beArmed = true;
-    log('Breakeven protection armed for ' + a.label + ' — Binance has no server-side stop, so this auto-closes in software if price falls back to entry. Only works while this page and the relay stay open.');
-    return;
-  }
-  if(pos.beArmed){
-    const backAtEntry = pos.side === 'BUY' ? a.lastPrice <= pos.entryPrice : a.lastPrice >= pos.entryPrice;
-    if(backAtEntry){
-      log('Price returned to entry after breakeven was armed — auto-closing ' + a.label + ' to protect the trade.');
-      bnCloseCurrentPositionFor(a);
+function bnSubscribe(a){
+  const host=state.bnEnv==='live'
+    ? (state.bnMarketMode==='futures'?'wss://fstream.binance.com':'wss://stream.binance.com:9443')
+    : (state.bnMarketMode==='futures'?'wss://stream.binancefuture.com':'wss://stream.testnet.binance.vision:9443');
+  const sym=a.symbol.toLowerCase();
+  const streams=[sym+'@bookTicker',sym+'@kline_1m',sym+'@kline_5m',sym+'@kline_15m',sym+'@kline_1h',sym+'@kline_4h'].join('/');
+  const url=host+'/stream?streams='+encodeURIComponent(streams);
+  try{ if(bnSockets[a.key] && bnSockets[a.key].readyState<=1) bnSockets[a.key].close(); }catch(e){}
+  const sock=new WebSocket(url);
+  sock.onopen=()=>log('Binance '+(state.bnMarketMode==='futures'?'Futures':'Spot')+' stream connected: '+a.label);
+  sock.onmessage=(ev)=>{
+    let wrapper; try{wrapper=JSON.parse(ev.data);}catch(e){return;}
+    const msg=wrapper.data||wrapper;
+    if(msg.e==='bookTicker'){
+      const bid=parseFloat(msg.b),ask=parseFloat(msg.a); if(!bid||!ask)return;
+      a.lastBid=bid;a.lastAsk=ask;a.lastPrice=(bid+ask)/2;
+      const pc=$('price_'+a.key);if(pc)pc.textContent=a.lastPrice.toFixed(a.full?a.full.digits:(a.lastPrice<1?6:a.lastPrice<100?4:2));
+      if(a.position){updateFloatingPnL(a);checkBinanceProtection(a);}
+      if(currentAsset===a.key)renderBotView(a);
+    }else if(msg.e==='kline'&&msg.k){
+      bnUpsertKline(a,msg.k.i,msg.k);
+      if(a.position)checkModeTimeExit(a);
+      if(currentAsset===a.key)renderBotView(a);
+      maybeAutoTrade(a);
     }
-  }
+  };
+  sock.onerror=()=>log('Binance stream error for '+a.label+'.');
+  sock.onclose=()=>{log('Binance stream closed for '+a.label+' — reconnecting in 1200ms.');clearTimeout(a.reconnectTimer);a.reconnectTimer=setTimeout(()=>bnSubscribe(a),1200);};
+  bnSockets[a.key]=sock;
 }
 
+function checkBinanceProtection(a){
+  const p=a.position;if(!p||p.paper||!p.entryPrice||!a.lastPrice||p.closing)return;
+  const m=TRADE_MODES[p.mode]||mode(),atr=p.atr||atrForTF(a,m.atrTf)||0;if(!atr)return;
+  const risk= p.initialRisk || atr*m.atrSL;
+  if(p.side==='BUY'){
+    if(a.lastPrice<=p.stopLossPrice){p.closing=true;log('['+m.label+'] '+a.label+' BUY stop reached.');bnCloseCurrentPositionFor(a);return;}
+    if(a.lastPrice>=p.takeProfitPrice){p.closing=true;log('['+m.label+'] '+a.label+' BUY target reached.');bnCloseCurrentPositionFor(a);return;}
+    if(risk>0&&!p.beArmed&&a.lastPrice-p.entryPrice>=risk*0.8){p.beArmed=true;p.stopLossPrice=p.entryPrice;log('Breakeven armed for '+a.label+'.');}
+  }else{
+    if(a.lastPrice>=p.stopLossPrice){p.closing=true;log('['+m.label+'] '+a.label+' SHORT stop reached.');bnCloseCurrentPositionFor(a);return;}
+    if(a.lastPrice<=p.takeProfitPrice){p.closing=true;log('['+m.label+'] '+a.label+' SHORT target reached.');bnCloseCurrentPositionFor(a);return;}
+    if(risk>0&&!p.beArmed&&p.entryPrice-a.lastPrice>=risk*0.8){p.beArmed=true;p.stopLossPrice=p.entryPrice;log('Breakeven armed for '+a.label+'.');}
+  }
+}
 
 function bnRoundQty(qty, step){
   if(!step) return qty;
@@ -836,86 +1029,77 @@ function bnRoundQty(qty, step){
 }
 
 async function bnExecuteTrade(a, side){
-  if(!a.lastPrice){ log('No live price yet for '+a.label+'.'); return; }
+  if(!a.lastPrice||a.pendingOrder)return;
+  const futures=state.bnMarketMode==='futures';
+  if(!futures && side==='SELL' && !a.position){log('Spot cannot open a short. Select Binance Futures for shorting.');return;}
+  if(!futures && a.position && side==='BUY'){log('Already long on '+a.label+'.');return;}
+  if(futures && !a.position && state.bnDirectionMode==='long' && side==='SELL')return;
+  if(futures && !a.position && state.bnDirectionMode==='short' && side==='BUY')return;
+  if(a.position && side===a.position.side){log('Already '+side+' on '+a.label+'.');return;}
+  if(!a.full){log('Still loading Binance trading rules for '+a.label+'.');return;}
 
-  const isClosing = side === 'SELL' && a.position;
+  const closing=!!a.position;
   let quantity;
-
-  if(isClosing){
-    quantity = a.position.volume; // sell exactly what we hold, no gating/sizing on a close
-  } else {
-    if(a.position){ log('Already in a position on '+a.label+' — close it first.'); return; }
-    if(!a.full){ log('Still loading '+a.label+'\'s trading rules from Binance — try again in a moment.'); return; }
-
-    let amountUsdt;
-    if(state.risk.useRiskSizing){
-      amountUsdt = state.balance * (state.risk.riskPct/100);
-    } else {
-      amountUsdt = parseFloat($('inVolMult').value) || 1;
-    }
-    const minNotional = a.full.minNotional || 5;
-    if(amountUsdt < minNotional){
-      log('$'+amountUsdt.toFixed(2)+' is below Binance\'s real minimum for '+a.label+' ($'+minNotional.toFixed(2)+'). Using $'+minNotional.toFixed(2)+' instead.');
-      amountUsdt = minNotional;
-    }
-    quantity = bnRoundQty(amountUsdt / a.lastPrice, a.full.stepSize);
-    if(quantity < a.full.minQty) quantity = bnRoundQty(a.full.minQty, a.full.stepSize) || a.full.minQty;
-    if(!quantity){ log('Could not size a valid order for '+a.label+'.'); return; }
-
-    if(!riskGate(a, quantity * a.lastPrice)) return;
+  if(closing){ quantity=a.position.volume; }
+  else{
+    const m=mode(),atr=atrForTF(a,m.atrTf)||0;
+    const riskDist=atr*m.atrSL;
+    if(!riskDist){log('Waiting for volatility data before sizing '+a.label+'.');return;}
+    const riskDollars=Math.max(0,state.balance*(state.risk.riskPct/100));
+    let notional=state.risk.useRiskSizing && futures ? (riskDollars/riskDist)*a.lastPrice : (parseFloat($('inVolMult').value)||5);
+    if(futures) notional=Math.max(notional, a.full.minNotional||5);
+    else notional=Math.max(notional,a.full.minNotional||5);
+    const maxNotional=state.balance*(futures?0.50:0.10)*(state.bnLeverage||1);
+    if(maxNotional>0)notional=Math.min(notional,maxNotional);
+    quantity=bnRoundQty(notional/a.lastPrice,a.full.stepSize);
+    if(quantity<a.full.minQty)quantity=bnRoundQty(a.full.minQty,a.full.stepSize)||a.full.minQty;
+    if(!quantity||!riskGate(a, futures?riskDollars:notional))return;
   }
 
-  if(!canSendRealOrders()){
-    if(isClosing){
-      log('[PAPER] Closed '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
-      recordResult(a.position.floatingPnL||0, true);
-      a.position = null;
-    } else {
-      a.position = {side:'BUY', entryPrice:a.lastPrice, volume:quantity, paper:true, floatingPnL:0, beArmed:false};
-      log('[PAPER] BUY '+a.label+' ~$'+(quantity*a.lastPrice).toFixed(2)+' (qty '+quantity+') @ '+a.lastPrice);
-    }
-    renderBotView(a);
-    return;
-  }
-
-  log('Sending '+side+' order for '+a.label+' (~$'+(quantity*a.lastPrice).toFixed(2)+') to relay...');
+  a.pendingOrder=true;
   try{
-    const res = await bnRelayCall('/api/binance/order', {symbol:a.symbol, side, quantity});
-    if(res.error){ log('ORDER ERROR: ' + res.error); return; }
-    log('FILLED '+side+' '+a.label+' qty='+res.executedQty+' avg price ~'+(res.cummulativeQuoteQty/res.executedQty).toFixed(4));
-    if(side === 'BUY' && !isClosing){
-      a.position = {side:'BUY', entryPrice: res.cummulativeQuoteQty/res.executedQty, volume: parseFloat(res.executedQty), floatingPnL:0, beArmed:false};
-    } else if(isClosing){
-      const proceeds = parseFloat(res.cummulativeQuoteQty);
-      const cost = a.position.entryPrice * a.position.volume;
-      const gp = proceeds - cost;
-      log('Position closed. Realized P&L: '+(gp>=0?'+':'')+gp.toFixed(2));
-      recordResult(gp, false);
-      a.position = null;
+    if(!canSendRealOrders()){
+      const m=mode(),atr=atrForTF(a,m.atrTf)||0;
+      if(closing){const pnl=a.position.floatingPnL||0;recordResult(pnl,true,a.position.mode);a.position=null;log('[PAPER] Closed '+a.label+' '+(pnl>=0?'+':'')+pnl.toFixed(2));}
+      else{
+        const risk=atr*m.atrSL,reward=atr*m.atrTP,entry=a.lastPrice;
+        a.position={side,entryPrice:entry,volume:quantity,paper:true,floatingPnL:0,openedAt:Date.now(),mode:state.tradeMode,atr,initialRisk:risk,stopLossPrice:side==='BUY'?entry-risk:entry+risk,takeProfitPrice:side==='BUY'?entry+reward:entry-reward,beArmed:false};
+        a.lastTradeAt=Date.now();log('[PAPER] '+side+' '+a.label+' ~$'+(quantity*entry).toFixed(2)+' @ '+entry);
+      }
+      renderBotView(a);return;
     }
-    const acct = await bnRelayCall('/api/binance/account', {});
-    if(!acct.error) bnApplyAccount(acct);
-    renderBotView(a);
-  } catch(e){
-    log('ORDER FAILED: could not reach relay. Open this page via http://localhost:8788 with binance_relay.py running.');
-  }
+    if(futures && !closing){
+      const lev=await bnRelayCall('/api/binance/leverage',{symbol:a.symbol,leverage:state.bnLeverage});
+      if(lev.error||lev.code<0){log('Leverage setup failed: '+(lev.error||lev.msg||JSON.stringify(lev)));return;}
+    }
+    const res=await bnRelayCall('/api/binance/order',{symbol:a.symbol,side,type:'MARKET',quantity,newOrderRespType:'RESULT'});
+    if(res.error||res.code<0){log('ORDER ERROR: '+(res.error||res.msg||JSON.stringify(res)));return;}
+    const executedQty=parseFloat(res.executedQty||quantity),quote=parseFloat(res.cummulativeQuoteQty||0),avg=executedQty?quote/executedQty:a.lastPrice;
+    log('FILLED '+side+' '+a.label+' qty='+executedQty+' avg='+avg);
+    if(closing){const old=a.position;const pnl=(avg-old.entryPrice)*(old.side==='BUY'?1:-1)*executedQty;recordResult(pnl,false,old.mode);a.position=null;a.lastTradeAt=Date.now();}
+    else{
+      const m=mode(),atr=atrForTF(a,m.atrTf)||0,risk=atr*m.atrSL,reward=atr*m.atrTP;
+      a.position={side,entryPrice:avg,volume:executedQty,paper:false,floatingPnL:0,openedAt:Date.now(),mode:state.tradeMode,atr,initialRisk:risk,stopLossPrice:side==='BUY'?avg-risk:avg+risk,takeProfitPrice:side==='BUY'?avg+reward:avg-reward,beArmed:false};
+      a.lastTradeAt=Date.now();
+      if(futures&&state.bnProtection&&atr){
+        const sl=a.position.stopLossPrice,tp=a.position.takeProfitPrice;
+        const pr=await bnRelayCall('/api/binance/protection',{symbol:a.symbol,side,stopPrice:sl,takeProfitPrice:tp});
+        if(pr.error)log('Protection order warning: '+pr.error); else log('Futures SL/TP placed for '+a.label+'.');
+      }
+    }
+    const acct=await bnRelayCall('/api/binance/account',{});if(!acct.error)bnApplyAccount(acct);renderBotView(a);
+  }catch(e){log('ORDER FAILED: '+e.message);}finally{a.pendingOrder=false;}
 }
-
 function bnCloseCurrentPosition(){
   const a = assets[currentAsset];
   if(!a) return;
   bnCloseCurrentPositionFor(a);
 }
 function bnCloseCurrentPositionFor(a){
-  if(!a || !a.position) return;
-  if(a.position.paper){
-    log('[PAPER] Closed '+a.position.side+' '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
-    recordResult(a.position.floatingPnL||0, true);
-    a.position = null;
-    if(currentAsset === a.key) renderBotView(a);
-    return;
-  }
-  bnExecuteTrade(a, a.position.side === 'BUY' ? 'SELL' : 'BUY');
+  if(!a||!a.position||a.pendingOrder)return;
+  if(a.position.paper){const pnl=a.position.floatingPnL||0;recordResult(pnl,true,a.position.mode);a.position=null;if(currentAsset===a.key)renderBotView(a);return;}
+  const closeSide=a.position.side==='BUY'?'SELL':'BUY';
+  bnExecuteTrade(a,closeSide);
 }
 
 
@@ -1072,7 +1256,7 @@ function ctAddAsset(key, label, name, bot, symbolId, defSL, defTP){
   assets[key] = {
     key, label, name, bot, defSL, defTP,
     symbolId, full:null, lastPrice:null,
-    closes:[], emaFast:null, emaSlow:null, position:null
+    closes:[], emaFast:null, emaSlow:null, position:null, bars1:[], bars5:[], bars15:[], bars60:[], bars240:[], currentBar:null, signalStreak:0, lastStableDirection:'WAIT', lastTradeAt:0, lastLossAt:0, lastSignal:null
   };
   const card = document.createElement('div');
   card.className = 'assetcard';
@@ -1127,128 +1311,251 @@ function onSpot(p){
   if(!bid && !ask) return;
   a.lastBid = bid; a.lastAsk = ask;
   const mid = ask && bid ? (bid+ask)/2 : (bid||ask);
+  if(!mid || !isFinite(mid)) return;
   a.lastPrice = mid;
   const pc = $('price_'+a.key); if(pc) pc.textContent = mid.toFixed(a.full ? a.full.digits : 5);
 
+  // Keep raw ticks only as a short execution buffer. Trading decisions are made
+  // from locally built M1/M5/M15 bars so a noisy quote cannot flip the strategy.
   a.closes.push(mid);
-  if(a.closes.length > 300) a.closes.shift();
+  if(a.closes.length > 1000) a.closes.shift();
+  updateBars(a, mid, Date.now());
   updateIndicators(a);
-  if(a.position){ updateFloatingPnL(a); checkBreakevenCtrader(a); }
+  if(a.position){ updateFloatingPnL(a); checkBreakevenCtrader(a); checkModeTimeExit(a); }
 
   if(currentAsset === a.key) renderBotView(a);
-
   maybeAutoTrade(a);
 }
 
-function checkBreakevenCtrader(a){
-  const pos = a.position;
-  if(!pos || pos.paper || pos.beMoved || !pos.entryPrice) return;
-  const moveFavorPct = pos.side === 'BUY'
-    ? ((a.lastPrice - pos.entryPrice) / pos.entryPrice) * 100
-    : ((pos.entryPrice - a.lastPrice) / pos.entryPrice) * 100;
-  if(moveFavorPct >= state.risk.breakevenTriggerPct){
-    pos.beMoved = true; // set immediately to avoid firing twice while the amend is in flight
-    send(PT.AMEND_POSITION_SLTP_REQ, {
-      ctidTraderAccountId: state.accountId,
-      positionId: pos.positionId,
-      stopLoss: pos.entryPrice,
-      takeProfit: pos.takeProfitPrice
+function ensureArrays(a){
+  a.bars1 = a.bars1 || []; a.bars5 = a.bars5 || []; a.bars15 = a.bars15 || [];
+  a.bars60 = a.bars60 || []; a.bars240 = a.bars240 || [];
+}
+
+function pushBar(store, bar, max){
+  if(!store.length || store[store.length-1].t !== bar.t) store.push(bar);
+  else store[store.length-1] = bar;
+  if(store.length > max) store.splice(0, store.length-max);
+}
+
+function updateBars(a, price, now){
+  ensureArrays(a);
+  const minute = Math.floor(now/60000)*60000;
+  const b = a.currentBar;
+  if(!b || b.t !== minute){
+    if(b){ a.bars1.push(b); updateHigherBars(a,b); }
+    a.currentBar = {t:minute,o:price,h:price,l:price,c:price};
+    if(a.bars1.length > 3000) a.bars1.shift();
+  } else {
+    b.h=Math.max(b.h,price); b.l=Math.min(b.l,price); b.c=price;
+  }
+  // M5/M15 are rebuilt from recent M1 bars; H1/H4 are maintained incrementally
+  // so longer trading styles do not require storing tens of thousands of M1 candles.
+  const completed = a.bars1;
+  const makeTF = (minutes, target) => {
+    const bucket = {};
+    completed.forEach(x=>{
+      const k=Math.floor(x.t/(minutes*60000))*(minutes*60000);
+      const q=bucket[k] || {t:k,o:x.o,h:x.h,l:x.l,c:x.c};
+      q.h=Math.max(q.h,x.h); q.l=Math.min(q.l,x.l); q.c=x.c; bucket[k]=q;
     });
-    log('Moved to breakeven: SL now at entry (' + pos.entryPrice.toFixed(5) + ') for ' + a.label + '.');
+    const arr=Object.values(bucket).sort((x,y)=>x.t-y.t);
+    target.length=0; arr.slice(-160).forEach(x=>target.push(x));
+  };
+  makeTF(5,a.bars5); makeTF(15,a.bars15);
+}
+function updateHigherBars(a,b){
+  ensureArrays(a);
+  const put=(minutes,target,max)=>{
+    const k=Math.floor(b.t/(minutes*60000))*(minutes*60000);
+    let q=target[target.length-1];
+    if(!q || q.t!==k){ q={t:k,o:b.o,h:b.h,l:b.l,c:b.c}; target.push(q); }
+    else { q.h=Math.max(q.h,b.h); q.l=Math.min(q.l,b.l); q.c=b.c; }
+    if(target.length>max) target.splice(0,target.length-max);
+  };
+  put(60,a.bars60,160); put(240,a.bars240,120);
+}
+
+function emaSeries(values, period){
+  if(values.length < period) return null;
+  let e=values.slice(0,period).reduce((x,y)=>x+y,0)/period;
+  const k=2/(period+1);
+  for(let i=period;i<values.length;i++) e=values[i]*k+e*(1-k);
+  return e;
+}
+function rsiSeries(values, period=14){
+  if(values.length <= period) return null;
+  let g=0,l=0;
+  for(let i=1;i<=period;i++){ const d=values[i]-values[i-1]; if(d>0)g+=d; else l-=d; }
+  let ag=g/period, al=l/period;
+  for(let i=period+1;i<values.length;i++){
+    const d=values[i]-values[i-1];
+    ag=(ag*(period-1)+Math.max(d,0))/period;
+    al=(al*(period-1)+Math.max(-d,0))/period;
   }
+  return al===0?100:100-(100/(1+ag/al));
+}
+function atrSeries(bars, period=14){
+  if(bars.length <= period) return null;
+  let trs=[];
+  for(let i=1;i<bars.length;i++){
+    const b=bars[i], prev=bars[i-1];
+    trs.push(Math.max(b.h-b.l,Math.abs(b.h-prev.c),Math.abs(b.l-prev.c)));
+  }
+  if(trs.length<period) return null;
+  let a=trs.slice(0,period).reduce((x,y)=>x+y,0)/period;
+  for(let i=period;i<trs.length;i++) a=(a*(period-1)+trs[i])/period;
+  return a;
+}
+function structureFor(bars, look=8){
+  if(bars.length < look*2) return 'WAIT';
+  const a=bars.slice(-look*2,-look), b=bars.slice(-look);
+  const ah=Math.max(...a.map(x=>x.h)), al=Math.min(...a.map(x=>x.l));
+  const bh=Math.max(...b.map(x=>x.h)), bl=Math.min(...b.map(x=>x.l));
+  if(bh>ah && bl>al) return 'BUY';
+  if(bh<ah && bl<al) return 'SELL';
+  return 'RANGE';
+}
+function trendStrength(bars){
+  if(bars.length<20) return 0;
+  const closes=bars.map(x=>x.c), e20=emaSeries(closes,20), e50=emaSeries(closes,Math.min(50,closes.length));
+  if(e20==null||e50==null) return 0;
+  const atr=atrSeries(bars,14)||0;
+  if(!atr) return 0;
+  return Math.min(1,Math.abs(e20-e50)/(atr*2));
+}
+function liquiditySignal(bars, atr){
+  if(bars.length<10 || !atr) return 'WAIT';
+  const prev=bars.slice(-6,-1), last=bars[bars.length-1];
+  const hi=Math.max(...prev.map(x=>x.h)), lo=Math.min(...prev.map(x=>x.l));
+  const range=Math.max(last.h-last.l,atr*0.05);
+  const bullReject=last.l < lo && last.c > lo && (last.c-last.l) > range*0.45;
+  const bearReject=last.h > hi && last.c < hi && (last.h-last.c) > range*0.45;
+  if(bullReject) return 'BUY'; if(bearReject) return 'SELL'; return 'WAIT';
 }
 
-function ema(prev, price, period){
-  const k = 2/(period+1);
-  return prev==null ? price : price*k + prev*(1-k);
+function updateIndicators(a){
+  ensureArrays(a);
+  const m=mode();
+  a.ready = tfBars(a,m.trendTf).length>=modeWarmupBars(m) && tfBars(a,m.setupTf).length>=25 && tfBars(a,m.entryTf).length>=25;
+  if(!a.ready){ a.rsi=null; a.structure=null; a.atr=null; return; }
+  const c1=a.bars1.map(x=>x.c), c5=a.bars5.map(x=>x.c), c15=a.bars15.map(x=>x.c);
+  a.emaFast=emaSeries(c1,9); a.emaSlow=emaSeries(c1,21); a.rsi=rsiSeries(c1,14); a.atr=atrSeries(a.bars1,14);
+  a.structure=structureFor(a.bars5,6);
+  const base=c1[Math.max(0,c1.length-6)];
+  a.momentum=base?((c1[c1.length-1]-base)/base)*100:0;
+  a.trend5=emaSeries(c5,20)>emaSeries(c5,50)?'BUY':'SELL';
+  a.trend15=emaSeries(c15,20)>emaSeries(c15,50)?'BUY':'SELL';
+  a.structure15=structureFor(a.bars15,5);
+  a.liquidity=liquiditySignal(a.bars1,a.atr);
+  a.strength5=trendStrength(a.bars5); a.strength15=trendStrength(a.bars15);
 }
 
-function updateIndicators(a, fast){
-  const pFast = fast ? 5 : 9, pSlow = fast ? 13 : 21, pRsi = fast ? 8 : 14, pMom = fast ? 5 : 10, pStruct = fast ? 12 : 20;
-  a.emaFast = ema(a.emaFast, a.lastPrice, pFast);
-  a.emaSlow = ema(a.emaSlow, a.lastPrice, pSlow);
-
-  const n = a.closes.length;
-  const win = pRsi;
-  if(n > win){
-    let gains=0, losses=0;
-    for(let i=n-win; i<n; i++){
-      const d = a.closes[i]-a.closes[i-1];
-      if(d>0) gains += d; else losses -= d;
-    }
-    const avgG = gains/win, avgL = losses/win;
-    a.rsi = avgL===0 ? 100 : 100 - (100/(1+ (avgG/avgL)));
-  } else a.rsi = null;
-
-  if(n > pMom){
-    const back = a.closes[n-1-pMom];
-    a.momentum = back ? ((a.lastPrice-back)/back)*100 : 0;
-  } else a.momentum = null;
-
-  if(n > pStruct){
-    const seg = a.closes.slice(n-pStruct);
-    let sum=0; for(let i=1;i<seg.length;i++) sum += Math.abs(seg[i]-seg[i-1]);
-    a.volatility = sum/seg.length;
-    const seg2 = a.closes.slice(n-pStruct*2, n-pStruct);
-    if(seg2.length>1){
-      let sum2=0; for(let i=1;i<seg2.length;i++) sum2 += Math.abs(seg2[i]-seg2[i-1]);
-      a.volAvg = sum2/seg2.length;
-    }
-    const hi = Math.max(...seg), lo = Math.min(...seg);
-    const firstHalf = seg.slice(0, Math.floor(seg.length/2));
-    const secondHalf = seg.slice(Math.floor(seg.length/2));
-    const hi1 = Math.max(...firstHalf), lo1 = Math.min(...firstHalf);
-    const hi2 = Math.max(...secondHalf), lo2 = Math.min(...secondHalf);
-    if(hi2>hi1 && lo2>lo1) a.structure = 'BUY';
-    else if(hi2<hi1 && lo2<lo1) a.structure = 'SELL';
-    else a.structure = 'RANGE';
-  } else { a.structure = null; a.volatility = null; }
+function directionForBars(bars){
+  if(!bars || bars.length<50) return 'WAIT';
+  const e20=emaSeries(bars.map(x=>x.c),20), e50=emaSeries(bars.map(x=>x.c),50);
+  if(e20==null||e50==null) return 'WAIT';
+  if(e20>e50) return 'BUY'; if(e20<e50) return 'SELL'; return 'WAIT';
 }
-
 function computeSignal(a){
-  const checks = [];
-  let buyVotes=0, sellVotes=0;
+  const m=mode();
+  const trendBars=tfBars(a,m.trendTf), setupBars=tfBars(a,m.setupTf), entryBars=tfBars(a,m.entryTf);
+  const ready=trendBars.length>=50 && setupBars.length>=25 && entryBars.length>=25;
+  if(!ready) return {direction:'WAIT',score:0,checks:[
+    {label:'Warm-up for '+m.label,tag:'WAIT'},
+    {label:'Trend ('+m.trendTf+'m)',tag:'WAIT'},
+    {label:'Setup ('+m.setupTf+'m)',tag:'WAIT'},
+    {label:'Entry ('+m.entryTf+'m)',tag:'WAIT'},
+    {label:'Volatility / spread',tag:'WAIT'}
+  ],tradeReady:false};
 
-  if(a.emaFast!=null && a.emaSlow!=null){
-    const dir = a.emaFast > a.emaSlow ? 'BUY' : 'SELL';
-    checks.push({label:'EMA trend (9/21)', tag:dir});
-    dir==='BUY'?buyVotes++:sellVotes++;
-  } else checks.push({label:'EMA trend (9/21)', tag:'WAIT'});
+  const checks=[];
+  const p=a.lastPrice, atr=atrForTF(a,m.atrTf);
+  const spreadPct=(a.lastBid&&a.lastAsk)?((a.lastAsk-a.lastBid)/p)*100:0;
+  const volOK=atr>0 && spreadPct<=state.risk.maxSpreadPct;
+  const trend=directionForBars(trendBars);
+  const setup=directionForBars(setupBars);
+  const structure=structureFor(setupBars,Math.min(8,Math.max(4,Math.floor(setupBars.length/6))));
+  const entryLiq=liquiditySignal(entryBars,atr);
+  const ec=entryBars.map(x=>x.c), r=rsiSeries(ec,14);
+  const momBase=ec[Math.max(0,ec.length-6)];
+  const mom=momBase?((ec[ec.length-1]-momBase)/momBase)*100:0;
+  const candle=entryBars[entryBars.length-1];
+  const body=Math.abs(candle.c-candle.o), range=Math.max(candle.h-candle.l,atr*0.05);
+  const candleDir=candle.c>candle.o?'BUY':candle.c<candle.o?'SELL':'WAIT';
+  const momentumDir=mom>m.momentumMin?'BUY':mom<-m.momentumMin?'SELL':'WAIT';
+  const rsiDir=r>m.rsiHigh?'BUY':r<m.rsiLow?'SELL':'WAIT';
+  const eSetup=emaSeries(setupBars.map(x=>x.c),20);
+  const extension=eSetup&&atr>0?Math.abs(p-eSetup)/atr:0;
 
-  if(a.momentum!=null){
-    const dir = a.momentum > 0.02 ? 'BUY' : (a.momentum < -0.02 ? 'SELL' : 'WAIT');
-    checks.push({label:'Momentum', tag:dir});
-    if(dir==='BUY') buyVotes++; else if(dir==='SELL') sellVotes++;
-  } else checks.push({label:'Momentum', tag:'WAIT'});
+  checks.push({label:'Trend ('+m.trendTf+'m)',tag:trend});
+  checks.push({label:'Setup / structure ('+m.setupTf+'m)',tag:setup===structure?setup:structure==='RANGE'?'RANGE':'WAIT'});
+  checks.push({label:'Entry / liquidity ('+m.entryTf+'m)',tag:entryLiq});
+  checks.push({label:'Momentum',tag:momentumDir});
+  checks.push({label:'RSI ('+(r==null?'—':r.toFixed(0))+')',tag:rsiDir});
+  checks.push({label:'Volatility / spread',tag:volOK?'PASS':'BLOCK'});
+  checks.push({label:'Entry extension',tag:extension<=m.extension?'PASS':'HIGH'});
 
-  if(a.rsi!=null){
-    const dir = a.rsi>52 ? 'BUY' : (a.rsi<48 ? 'SELL' : 'WAIT');
-    checks.push({label:'RSI ('+a.rsi.toFixed(0)+')', tag:dir});
-    if(dir==='BUY') buyVotes++; else if(dir==='SELL') sellVotes++;
-  } else checks.push({label:'RSI', tag:'WAIT'});
-
-  if(a.structure){
-    checks.push({label:'Market structure', tag:a.structure==='RANGE'?'RANGE':a.structure});
-    if(a.structure==='BUY') buyVotes++; else if(a.structure==='SELL') sellVotes++;
-  } else checks.push({label:'Market structure', tag:'WAIT'});
-
-  let volTag = 'PASS';
-  if(a.volatility!=null && a.volAvg){
-    volTag = a.volatility > a.volAvg*2.2 ? 'HIGH' : 'PASS';
+  let direction='WAIT',score=0;
+  const structureOK=(structure===setup || structure==='RANGE');
+  const entryOK=(entryLiq===setup || (entryLiq==='WAIT' && candleDir===setup && body/range>=0.55));
+  if(trend!== 'WAIT' && trend===setup && structureOK && entryOK && volOK && extension<=m.extension){
+    direction=setup; score=48;
+    if(entryLiq===direction) score+=14;
+    if(momentumDir===direction) score+=10;
+    if(rsiDir===direction) score+=8;
+    if(candleDir===direction) score+=6;
+    if((direction==='BUY'&&r>50)||(direction==='SELL'&&r<50)) score+=4;
+    const strength=trendStrength(trendBars);
+    if(strength>0.35) score+=5;
+    if(structure===direction) score+=5;
   }
-  checks.push({label:'Volatility filter', tag:volTag});
+  if(!volOK || extension>m.extension) score=0;
+  score=Math.max(0,Math.min(100,Math.round(score)));
 
-  const totalVotes = 4;
-  let direction = 'WAIT', agree = 0;
-  if(buyVotes >= 3){ direction='BUY'; agree=buyVotes; }
-  else if(sellVotes >= 3){ direction='SELL'; agree=sellVotes; }
-  else { direction='WAIT'; agree=Math.max(buyVotes,sellVotes); }
+  if(direction!=='WAIT' && score>=m.minScore){
+    if(a.lastStableDirection===direction) a.signalStreak=(a.signalStreak||0)+1;
+    else { a.lastStableDirection=direction; a.signalStreak=1; }
+  } else { a.signalStreak=0; a.lastStableDirection='WAIT'; }
+  const stable=a.signalStreak>=m.streak;
+  return {direction,score,checks,tradeReady:stable && score>=m.minScore && volOK && extension<=m.extension};
+}
 
-  let score = Math.round((agree/totalVotes)*100);
-  if(volTag==='HIGH') score = Math.max(0, score-15);
-  if(a.rsi==null || a.structure==null) score = Math.min(score, 40); // still warming up
-
-  return {direction, score, checks};
+function modePlan(a){
+  const m=mode(), atr=atrForTF(a,m.atrTf);
+  if(!atr) return {sl:a.defSL||0,tp:a.defTP||0,atr:0,mode:m};
+  return {sl:atr*m.atrSL,tp:atr*m.atrTP,atr,mode:m};
+}
+function renderModeGrid(){
+  const grid=$('modeGrid'); if(!grid) return;
+  grid.innerHTML='';
+  Object.entries(TRADE_MODES).forEach(([key,m])=>{
+    const d=document.createElement('div'); d.className='modecard'+(state.tradeMode===key?' active':'');
+    d.onclick=()=>setTradeMode(key);
+    d.innerHTML='<b>'+m.label+'</b><small>'+m.desc+'</small><span class="modebadge">'+m.minScore+'+ SCORE</span>';
+    grid.appendChild(d);
+  });
+  const m=mode();
+  const status=$('modeStatus'); if(status) status.textContent='ACTIVE: '+m.label+' · Trend '+m.trendTf+'m → Setup '+m.setupTf+'m → Entry '+m.entryTf+'m · Max hold '+formatHold(m.maxHoldMs)+' · Longer modes need more warm-up data.';
+}
+function formatHold(ms){
+  if(ms>=24*60*60*1000) return (ms/(24*60*60*1000)).toFixed(ms%(24*60*60*1000)?1:0)+'d';
+  if(ms>=60*60*1000) return (ms/(60*60*1000)).toFixed(ms%(60*60*1000)?1:0)+'h';
+  return Math.round(ms/60000)+'m';
+}
+function setTradeMode(key){
+  if(!TRADE_MODES[key]) return;
+  state.tradeMode=key;
+  localStorage.setItem('morgan_trade_mode',key);
+  Object.values(assets).forEach(a=>{a.signalStreak=0;a.lastStableDirection='WAIT';a.lastSignal=null;});
+  renderModeGrid();
+  renderPaperStats();
+  if(currentAsset) renderBotView(assets[currentAsset]);
+  log('Trading style changed to '+mode().label+'. Existing positions keep their original mode plan. New entries use '+mode().label+'.');
+}
+function toggleModeProtection(){
+  state.modeProtection=$('swModeProtection').classList.toggle('on');
+  if(currentAsset) renderBotView(assets[currentAsset]);
 }
 
 /* ---------------- Bot view ---------------- */
@@ -1258,8 +1565,10 @@ function openBot(key){
   const a = assets[key];
   $('botTitle').textContent = a.bot;
   $('botSubtitle').textContent = a.label + ' · ' + a.name;
-  $('inSL').value = a.defSL;
-  $('inTP').value = a.defTP;
+  const plan=modePlan(a);
+  $('inSL').value = plan.sl ? plan.sl : a.defSL;
+  $('inTP').value = plan.tp ? plan.tp : a.defTP;
+  $('inMinScore').value = mode().minScore;
   const isBn = state.broker === 'binance';
   $('slWrap').hidden = isBn; $('tpWrap').hidden = isBn; $('bnNoSlTpNote').hidden = !isBn;
   $('bnAmountHint').hidden = !isBn;
@@ -1315,6 +1624,10 @@ function renderBotView(a){
   }
 
   $('sigPrice').textContent = a.lastPrice ? ('price ' + a.lastPrice.toFixed(a.full?a.full.digits:5)) : 'waiting for price...';
+  const plan=modePlan(a), mh=$('modePlanHint');
+  if(mh) mh.textContent = mode().label+' · '+mode().trendTf+'m trend → '+mode().setupTf+'m setup → '+mode().entryTf+'m entry · ATR SL '+mode().atrSL+'× / TP '+mode().atrTP+'× · Max hold '+formatHold(mode().maxHoldMs)+(state.modeProtection?' · AUTO PROTECTION ON':' · CUSTOM PROTECTION');
+  const mt=$('botSubtitle'); if(mt) mt.textContent = a.label+' · '+a.name+' · '+mode().label;
+  if(state.modeProtection){ $('inSL').value=plan.sl||a.defSL; $('inTP').value=plan.tp||a.defTP; }
 
   if(a.position){
     $('positionPanel').hidden = false;
@@ -1376,35 +1689,49 @@ function stopAllTrading(){
     btn.textContent = '▶ RESUME TRADING';
     status.textContent = 'All new trades blocked (auto and manual opens). You can still close existing positions.';
   } else {
+    state.risk.consecutiveLosses = 0; // resuming manually is an acknowledged fresh start
     btn.textContent = '⏹ STOP — HALT ALL TRADING';
     status.textContent = '';
   }
 }
 
 function maybeAutoTrade(a){
-  if(!state.auto) return;
-  if(!a.lastSignal || a.position) return;
-  const sig = a.lastSignal;
-  const minScore = parseInt($('inMinScore') ? $('inMinScore').value : 70) || 70;
-  if(sig.direction!=='WAIT' && sig.score >= minScore){
-    if(state.broker === 'binance') bnExecuteTrade(a, sig.direction);
-    else ctExecuteTrade(a, sig.direction);
+  if(!state.auto || !a.lastSignal || state.stopped || a.pendingOrder) return;
+  const sig=a.lastSignal, m=mode();
+  const minScore=Math.max(m.minScore,parseInt($('inMinScore') ? $('inMinScore').value : m.minScore)||m.minScore);
+  if(!sig.tradeReady || sig.score<minScore) return;
+  if(Date.now()-(a.lastTradeAt||0)<m.cooldownMs) return;
+  if(Date.now()-(a.lastLossAt||0)<m.cooldownMs) return;
+
+  if(state.broker==='binance'){
+    if(!a.position && sig.direction==='BUY') bnExecuteTrade(a,'BUY');
+    else if(a.position && sig.direction==='SELL') bnExecuteTrade(a,'SELL');
+  } else {
+    if(!a.position) ctExecuteTrade(a,sig.direction);
   }
 }
 
 function manualTrade(side){
   if(!currentAsset) return;
   const a = assets[currentAsset];
-  if(state.broker === 'binance'){ bnExecuteTrade(a, side); }
-  else { ctExecuteTrade(a, side); }
+  if(state.broker === 'binance'){
+    if(side==='SELL' && !a.position){
+      log('Binance Spot is long-only here: SELL is available only to close an existing BUY.');
+      return;
+    }
+    bnExecuteTrade(a, side);
+  } else {
+    ctExecuteTrade(a, side);
+  }
 }
 
 function ctExecuteTrade(a, side){
   if(!a.lastPrice){ log('No live price yet for '+a.label+'.'); return; }
   if(a.position){ log('Already in a position on '+a.label+' — close it first.'); return; }
 
-  const slDist = parseFloat($('inSL').value)|| a.defSL;
-  const tpDist = parseFloat($('inTP').value)|| a.defTP;
+  const plan=modePlan(a);
+  const slDist = state.modeProtection ? (plan.sl||a.defSL) : (parseFloat($('inSL').value)||a.defSL);
+  const tpDist = state.modeProtection ? (plan.tp||a.defTP) : (parseFloat($('inTP').value)||a.defTP);
   const relSL = Math.round(slDist*100000);
   const relTP = Math.round(tpDist*100000);
   const minVol = a.full ? a.full.minVolume : 1000;
@@ -1431,14 +1758,17 @@ function ctExecuteTrade(a, side){
 
   if(!canSendRealOrders()){
     // PAPER SIMULATION — no order sent
-    a.position = {side, entryPrice:a.lastPrice, volume, paper:true, floatingPnL:0,
+    a.lastTradeAt = Date.now();
+    a.position = {side, entryPrice:a.lastPrice, volume, paper:true, floatingPnL:0, openedAt:Date.now(), mode:state.tradeMode,
       takeProfitPrice: side==='BUY' ? a.lastPrice+tpDist : a.lastPrice-tpDist,
+      stopLossPrice: side==='BUY' ? a.lastPrice-slDist : a.lastPrice+slDist,
       riskDollars: prospectiveRisk, beMoved:false};
     log('[PAPER] '+side+' '+a.label+' '+lotsUsed.toFixed(2)+' lots @ '+a.lastPrice.toFixed(5)+' (risking ~$'+prospectiveRisk.toFixed(2)+')');
     renderBotView(a);
     return;
   }
 
+  a.lastTradeAt = Date.now();
   send(PT.NEW_ORDER_REQ, {
     ctidTraderAccountId: state.accountId,
     symbolId: a.symbolId,
@@ -1447,7 +1777,7 @@ function ctExecuteTrade(a, side){
     volume,
     relativeStopLoss: relSL,
     relativeTakeProfit: relTP,
-    comment: 'MorganAI',
+    comment: 'MorganAI-'+state.tradeMode,
     label: a.key
   });
   log('Order sent: '+side+' '+a.label+' '+lotsUsed.toFixed(2)+' lots, risking ~$'+prospectiveRisk.toFixed(2)+' (real order to '+state.env+' account)');
@@ -1501,8 +1831,9 @@ function trackPosition(a, posPayload){
   a.position = {
     positionId: posPayload.positionId,
     side: posPayload.tradeData.tradeSide===1 ? 'BUY':'SELL',
-    entryPrice, volume,
+    entryPrice, volume, openedAt:Date.now(), mode:state.tradeMode,
     takeProfitPrice,
+    stopLossPrice,
     riskDollars: stopLossPrice ? Math.abs(entryPrice - stopLossPrice) * volume/100 : 0,
     beMoved: false,
     floatingPnL: 0
@@ -1510,15 +1841,28 @@ function trackPosition(a, posPayload){
   renderBotView(a);
 }
 
-function updateFloatingPnL(a){
-  if(!a.position || a.position.paper===undefined){
-    if(!a.position) return;
+function checkModeTimeExit(a){
+  if(!a.position || !a.position.openedAt) return;
+  const positionMode=TRADE_MODES[a.position.mode]||mode();
+  if(Date.now()-a.position.openedAt < positionMode.maxHoldMs) return;
+  log('['+positionMode.label+'] Maximum holding time reached for '+a.label+' — closing position.');
+  if(a.position.paper){
+    recordResult(a.position.floatingPnL||0,true); a.position=null; if(currentAsset===a.key) renderBotView(a); return;
   }
+  if(state.broker==='ctrader') send(PT.CLOSE_POSITION_REQ,{ctidTraderAccountId:state.accountId,positionId:a.position.positionId,volume:a.position.volume});
+  else if(state.broker==='binance'){ log('Auto time-exit requested for '+a.label+'. Binance position must be closed by the Binance close handler.'); }
+}
+
+function updateFloatingPnL(a){
   if(!a.position) return;
-  const dir = a.position.side==='BUY' ? 1 : -1;
-  const priceDiff = (a.lastPrice - a.position.entryPrice) * dir;
-  // Rough estimate in quote currency terms; exact P&L/moneyDigits conversion happens server-side on close.
-  a.position.floatingPnL = priceDiff * (a.position.volume/100);
+  const dir=a.position.side==='BUY'?1:-1;
+  const priceDiff=(a.lastPrice-a.position.entryPrice)*dir;
+  if(state.broker==='binance'){
+    // Binance Spot quantity is base-asset units, so quote P&L is price change × quantity.
+    a.position.floatingPnL=priceDiff*a.position.volume;
+  } else {
+    a.position.floatingPnL=priceDiff*(a.position.volume/100);
+  }
   refreshEquity();
 }
 
@@ -1545,17 +1889,117 @@ function onExecution(p){
   else if(et===7){ log('Order rejected: '+(p.errorCode||'unknown reason')); }
 }
 
-function recordResult(pnlAmount, isPaper){
+/* ---------------- Performance lab ---------------- */
+function ensurePaperModeStats(modeKey){
+  if(!state.paperStats[modeKey]) state.paperStats[modeKey]={trades:0,wins:0,losses:0,pnl:0,profit:0,loss:0,maxDD:0,equity:0,peak:0};
+  return state.paperStats[modeKey];
+}
+function savePaperStats(){
+  localStorage.setItem('morgan_paper_stats', JSON.stringify(state.paperStats));
+  renderPaperStats();
+}
+function resetPaperStats(){
+  if(!confirm('Reset all saved paper-trading statistics?')) return;
+  state.paperStats={};
+  localStorage.removeItem('morgan_paper_stats');
+  renderPaperStats();
+}
+function renderPaperStats(){
+  const el=$('paperStatsResult'); if(!el) return;
+  const keys=Object.keys(state.paperStats);
+  if(!keys.length){ el.textContent='Paper statistics: no completed paper trades yet.'; return; }
+  el.innerHTML='<b>Paper statistics by style</b><br>'+keys.map(k=>{
+    const x=state.paperStats[k], wr=x.trades?x.wins/x.trades*100:0, pf=x.loss>0?x.profit/x.loss:Infinity;
+    return '<span style="display:block;margin-top:4px;">'+(TRADE_MODES[k]?.label||k)+': '+x.trades+' trades · '+wr.toFixed(1)+'% win · P&L '+(x.pnl>=0?'+':'')+x.pnl.toFixed(2)+' · PF '+(isFinite(pf)?pf.toFixed(2):'∞')+' · max DD '+x.maxDD.toFixed(2)+'</span>';
+  }).join('');
+}
+function backtestBarsFor(a, tf){ return tfBars(a,tf)||[]; }
+function barsThrough(bars, t){ return bars.filter(b=>b.t<=t); }
+function makeBacktestSnapshot(a, t){
+  const x=Object.assign({},a);
+  x.bars1=barsThrough(a.bars1,t); x.bars5=barsThrough(a.bars5,t); x.bars15=barsThrough(a.bars15,t); x.bars60=barsThrough(a.bars60,t); x.bars240=barsThrough(a.bars240,t);
+  x.lastPrice=x.bars1.length?x.bars1[x.bars1.length-1].c:null;
+  x.lastBid=x.lastPrice; x.lastAsk=x.lastPrice;
+  x.signalStreak=0; x.lastStableDirection='WAIT'; x.lastSignal=null; x.position=null;
+  return x;
+}
+function runBacktestForMode(a, modeKey, requestedBars){
+  if(!a || !a.bars1?.length) return {error:'No historical candles loaded for '+(a?.label||'this pair')+'.'};
+  const oldMode=state.tradeMode; state.tradeMode=modeKey;
+  const m=TRADE_MODES[modeKey];
+  const entryBars=backtestBarsFor(a,m.entryTf).slice(-requestedBars);
+  if(entryBars.length<60){ state.tradeMode=oldMode; return {error:'Not enough '+m.entryTf+'m candles for '+m.label+'. Load more history or use a shorter style.'}; }
+  const spreadPct=parseFloat($('backtestSpread')?.value)||0.01;
+  const oldSpread=state.risk.maxSpreadPct; state.risk.maxSpreadPct=Math.max(oldSpread,spreadPct);
+  const trades=[]; let pos=null; let equityR=0, peakR=0, maxDD=0, signalStreak=0, stableDirection='WAIT';
+  for(let i=50;i<entryBars.length-1;i++){
+    const signalBar=entryBars[i], snap=makeBacktestSnapshot(a,signalBar.t); snap.lastBid=signalBar.c*(1-spreadPct/200); snap.lastAsk=signalBar.c*(1+spreadPct/200); snap.signalStreak=signalStreak; snap.lastStableDirection=stableDirection;
+    const sig=computeSignal(snap); signalStreak=snap.signalStreak||0; stableDirection=snap.lastStableDirection||'WAIT';
+    if(pos){
+      const b=entryBars[i+1];
+      const elapsed=b.t-pos.openedAt;
+      let exit=null, reason='';
+      if(pos.side==='BUY'){
+        if(b.l<=pos.sl){exit=pos.sl;reason='SL';} else if(b.h>=pos.tp){exit=pos.tp;reason='TP';}
+      } else {
+        if(b.h>=pos.sl){exit=pos.sl;reason='SL';} else if(b.l<=pos.tp){exit=pos.tp;reason='TP';}
+      }
+      if(exit==null && elapsed>=m.maxHoldMs){exit=b.c;reason='TIME';}
+      if(exit!=null){
+        const move=(exit-pos.entry)*(pos.side==='BUY'?1:-1), r=pos.risk>0?move/pos.risk:0;
+        trades.push({side:pos.side,entry:pos.entry,exit,r,reason,score:pos.score}); equityR+=r; peakR=Math.max(peakR,equityR); maxDD=Math.max(maxDD,peakR-equityR); pos=null; continue; }
+    }
+    if(!pos && sig.tradeReady){
+      // Enter at the next candle OPEN to avoid look-ahead bias.
+      const b=entryBars[i+1], atr=atrForTF(snap,m.atrTf);
+      if(!atr) continue;
+      const side=sig.direction;
+      if(state.broker==='binance' && side!=='BUY') continue; // Spot cannot open shorts.
+      const entry=b.o, risk=atr*m.atrSL, reward=atr*m.atrTP;
+      pos={side,entry,risk,sl:side==='BUY'?entry-risk:entry+risk,tp:side==='BUY'?entry+reward:entry-reward,openedAt:b.t,score:sig.score};
+    }
+  }
+  if(pos){
+    const b=entryBars[entryBars.length-1], exit=b.c, move=(exit-pos.entry)*(pos.side==='BUY'?1:-1), r=pos.risk?move/pos.risk:0; trades.push({side:pos.side,entry:pos.entry,exit,r,reason:'END',score:pos.score}); equityR+=r; peakR=Math.max(peakR,equityR); maxDD=Math.max(maxDD,peakR-equityR);
+  }
+  state.risk.maxSpreadPct=oldSpread; state.tradeMode=oldMode;
+  const wins=trades.filter(t=>t.r>0).length, losses=trades.filter(t=>t.r<0).length, grossWin=trades.filter(t=>t.r>0).reduce((s,t)=>s+t.r,0), grossLoss=Math.abs(trades.filter(t=>t.r<0).reduce((s,t)=>s+t.r,0));
+  return {mode:modeKey,trades:trades.length,wins,losses,winRate:trades.length?wins/trades.length*100:0,netR:equityR,profitFactor:grossLoss?grossWin/grossLoss:Infinity,maxDD,expectancy:trades.length?equityR/trades.length:0,periodStart:entryBars[0].t,periodEnd:entryBars[entryBars.length-1].t};
+}
+async function runSelectedBacktest(){
+  const el=$('backtestResult');
+  if(!currentAsset){ el.textContent='Open a pair first, then run the backtest for that pair.'; return; }
+  const a=assets[currentAsset], bars=parseInt($('backtestBars')?.value||500,10), key=state.tradeMode;
+  el.textContent='Running '+mode().label+' backtest on '+a.label+'...';
+  // Let the UI paint before the calculation.
+  await new Promise(r=>setTimeout(r,30));
+  const r=runBacktestForMode(a,key,bars);
+  if(r.error){ el.textContent='Backtest: '+r.error; return; }
+  el.innerHTML='<b>'+mode().label+' · '+a.label+'</b><br>'+r.trades+' trades · '+r.winRate.toFixed(1)+'% win rate · Net '+(r.netR>=0?'+':'')+r.netR.toFixed(2)+'R · Expectancy '+(r.expectancy>=0?'+':'')+r.expectancy.toFixed(3)+'R · Profit factor '+(isFinite(r.profitFactor)?r.profitFactor.toFixed(2):'∞')+' · Max DD '+r.maxDD.toFixed(2)+'R';
+}
+
+function recordResult(pnlAmount, isPaper, modeKey){
   const won = pnlAmount >= 0;
-  if(won){ state.wins++; $('stWins').textContent = state.wins; }
+  if(won){
+    state.wins++; $('stWins').textContent = state.wins;
+    state.risk.consecutiveLosses = 0;
+  }
   else {
     state.losses++; $('stLosses').textContent = state.losses;
+    if(currentAsset && assets[currentAsset]) assets[currentAsset].lastLossAt = Date.now();
     resetDailyIfNeeded();
     state.risk.dailyLossUsed += Math.abs(pnlAmount);
+    state.risk.consecutiveLosses++;
   }
   if(isPaper){
     if(state.paperBalance == null) state.paperBalance = state.balance;
     state.paperBalance += pnlAmount;
+    const modeKey=modeKey || (currentAsset && assets[currentAsset] && assets[currentAsset].position ? assets[currentAsset].position.mode : state.tradeMode);
+    const st=ensurePaperModeStats(modeKey || state.tradeMode);
+    st.trades++; st.pnl+=pnlAmount;
+    if(pnlAmount>0){ st.wins++; st.profit+=pnlAmount; } else if(pnlAmount<0){ st.losses++; st.loss+=Math.abs(pnlAmount); }
+    st.equity+=pnlAmount; st.peak=Math.max(st.peak,st.equity); st.maxDD=Math.max(st.maxDD,st.peak-st.equity);
+    savePaperStats();
   }
   updateBalanceDisplay();
   const dl = $('dailyLossStatus');
@@ -1563,10 +2007,91 @@ function recordResult(pnlAmount, isPaper){
     const base = isPaper ? state.paperBalance : state.balance;
     const cap = base * (state.risk.dailyLossLimitPct/100);
     dl.textContent = 'Daily loss used: $' + state.risk.dailyLossUsed.toFixed(2) + ' of $' + cap.toFixed(2) + ' limit'
-      + (dailyLossLimitHit() ? ' — LIMIT REACHED, trading paused today.' : '');
+      + ' · Trades today: ' + state.risk.dailyTradeCount + '/' + state.risk.maxTradesPerDay
+      + ' · Losing streak: ' + state.risk.consecutiveLosses + '/' + state.risk.maxConsecutiveLosses
+      + (dailyLossLimitHit() ? ' — DAILY LOSS LIMIT REACHED.' : '')
+      + (dailyTradeCapHit() ? ' — TRADE LIMIT REACHED.' : '');
   }
 }
 
+
+/* ---------------- Binance unified Spot/Futures controls ---------------- */
+function syncBnControls(){
+  const ids={bnMarketMode:state.bnMarketMode,bnDirectionMode:state.bnDirectionMode,bnStrategyMode:state.bnStrategyMode,bnLeverage:String(state.bnLeverage)};
+  Object.entries(ids).forEach(([id,v])=>{const e=$(id);if(e)e.value=v;});
+  const w=$('swBnProtection');if(w)w.classList.toggle('on',state.bnProtection);
+  const panel=$('binanceControlPanel');if(panel)panel.hidden=state.broker!=='binance';
+  const warn=$('bnMarketWarning');if(warn)warn.textContent=state.bnMarketMode==='futures'?'Futures enabled: Morgan can open LONG and SHORT positions. Hard risk limits remain active.':'Spot mode: Morgan can BUY and SELL to close, but cannot open a short position.';
+  const st=$('bnModeStatus');if(st)st.textContent='BINANCE '+state.bnMarketMode.toUpperCase()+' · '+state.bnDirectionMode.toUpperCase()+' · '+(TRADE_MODES[state.tradeMode]?.label||state.tradeMode)+' · '+state.bnStrategyMode.toUpperCase()+' · '+state.bnLeverage+'x';
+}
+function setBnMarketMode(v){
+  if(state.broker!=='binance')return; state.bnMarketMode=v; if(v==='spot')state.bnDirectionMode='long';
+  localStorage.setItem('morgan_bn_market',v);localStorage.setItem('morgan_bn_direction',state.bnDirectionMode);
+  Object.values(bnSockets).forEach(x=>{try{x.close();}catch(e){}});bnSockets={};
+  syncBnControls();
+  if(state.accountReady){
+    bnRelayCall('/api/binance/account',{}).then(acct=>{if(!acct.error)bnApplyAccount(acct);});
+    bnIndexSymbols();
+  }
+}
+function setBnDirectionMode(v){
+  if(state.bnMarketMode==='spot'&&v!=='long'){alert('Binance Spot cannot open shorts. Select Futures first.');$('bnDirectionMode').value='long';return;}
+  state.bnDirectionMode=v;localStorage.setItem('morgan_bn_direction',v);syncBnControls();
+}
+function setBnStrategyMode(v){state.bnStrategyMode=v;localStorage.setItem('morgan_bn_strategy',v);syncBnControls();}
+function setBnLeverage(v){state.bnLeverage=Math.max(1,Math.min(20,parseInt(v,10)||3));localStorage.setItem('morgan_bn_leverage',String(state.bnLeverage));syncBnControls();}
+function effectiveModeForBinance(){
+  const base=_origMode();
+  if(state.bnStrategyMode==='conservative')return Object.assign({},base,{minScore:Math.min(100,mode().minScore+7),streak:Math.max(2,mode().streak+1)});
+  if(state.bnStrategyMode==='aggressive')return Object.assign({},base,{minScore:Math.max(65,mode().minScore-7),streak:1,cooldownMs:Math.max(15000,Math.floor(mode().cooldownMs/2))});
+  return base;
+}
+const _origMode=mode;
+mode=function(){return state.broker==='binance'?effectiveModeForBinance():_origMode();};
+const _origBnAddAsset=bnAddAsset;
+bnAddAsset=function(c){_origBnAddAsset(c);syncBnControls();};
+const _origMaybeAutoTrade=maybeAutoTrade;
+maybeAutoTrade=function(a){
+  if(state.broker!=='binance'){_origMaybeAutoTrade(a);return;}
+  if(!state.auto||!a.lastSignal||state.stopped||a.pendingOrder)return;
+  const sig=a.lastSignal,m=mode();const minScore=Math.max(m.minScore,parseInt($('inMinScore')?.value||m.minScore,10)||m.minScore);
+  if(!sig.tradeReady||sig.score<minScore||Date.now()-(a.lastTradeAt||0)<m.cooldownMs||Date.now()-(a.lastLossAt||0)<m.cooldownMs)return;
+  if(state.bnDirectionMode==='long'&&sig.direction!=='BUY')return;
+  if(state.bnDirectionMode==='short'&&sig.direction!=='SELL')return;
+  if(!a.position)bnExecuteTrade(a,sig.direction);
+  else if(state.bnMarketMode==='futures'&&sig.direction!==a.position.side)bnExecuteTrade(a,sig.direction);
+  else if(state.bnMarketMode==='spot'&&a.position.side==='BUY'&&sig.direction==='SELL')bnExecuteTrade(a,'SELL');
+};
+const _origManualTrade=manualTrade;
+manualTrade=function(side){
+  if(state.broker==='binance'){
+    if(state.bnMarketMode==='spot'&&side==='SELL'&&!assets[currentAsset]?.position){log('Spot cannot open a short. Use Futures.');return;}
+    bnExecuteTrade(assets[currentAsset],side);return;
+  }
+  _origManualTrade(side);
+};
+const _origRunBacktest=runBacktestForMode;
+runBacktestForMode=function(a,key,bars){
+  const old=state.broker; if(old==='binance'&&state.bnMarketMode==='futures'){
+    // Temporarily allow both directions in the simulator; this is still a backtest, not an order.
+    const r=(function(){
+      const oldMode=state.tradeMode;state.tradeMode=key;const m=TRADE_MODES[key],entryBars=backtestBarsFor(a,m.entryTf).slice(-bars);
+      if(entryBars.length<60){state.tradeMode=oldMode;return {error:'Not enough historical candles.'};}
+      const trades=[];let pos=null,equityR=0,peakR=0,maxDD=0,streak=0,stable='WAIT';
+      for(let i=50;i<entryBars.length-1;i++){
+        const sb=entryBars[i],snap=makeBacktestSnapshot(a,sb.t);snap.lastBid=sb.c;snap.lastAsk=sb.c;snap.signalStreak=streak;snap.lastStableDirection=stable;const sig=computeSignal(snap);streak=snap.signalStreak||0;stable=snap.lastStableDirection||'WAIT';
+        if(pos){const b=entryBars[i+1];let ex=null,rs='';if(pos.side==='BUY'){if(b.l<=pos.sl){ex=pos.sl;rs='SL';}else if(b.h>=pos.tp){ex=pos.tp;rs='TP';}}else{if(b.h>=pos.sl){ex=pos.sl;rs='SL';}else if(b.l<=pos.tp){ex=pos.tp;rs='TP';}}if(ex==null&&b.t-pos.openedAt>=m.maxHoldMs){ex=b.c;rs='TIME';}if(ex!=null){const rr=((ex-pos.entry)*(pos.side==='BUY'?1:-1))/pos.risk;trades.push({side:pos.side,r:rr,reason:rs});equityR+=rr;peakR=Math.max(peakR,equityR);maxDD=Math.max(maxDD,peakR-equityR);pos=null;continue;}}
+        if(!pos&&sig.tradeReady){const b=entryBars[i+1],atr=atrForTF(snap,m.atrTf);if(!atr)continue;const side=sig.direction;if(state.bnDirectionMode==='long'&&side!=='BUY')continue;if(state.bnDirectionMode==='short'&&side!=='SELL')continue;const risk=atr*m.atrSL,reward=atr*m.atrTP;pos={side,entry:b.o,risk,sl:side==='BUY'?b.o-risk:b.o+risk,tp:side==='BUY'?b.o+reward:b.o-reward,openedAt:b.t};}}
+      if(pos){const b=entryBars.at(-1),rr=((b.c-pos.entry)*(pos.side==='BUY'?1:-1))/pos.risk;trades.push({side:pos.side,r:rr,reason:'END'});equityR+=rr;peakR=Math.max(peakR,equityR);maxDD=Math.max(maxDD,peakR-equityR);}
+      state.tradeMode=oldMode;const wins=trades.filter(t=>t.r>0).length,losses=trades.filter(t=>t.r<0).length,gw=trades.filter(t=>t.r>0).reduce((x,t)=>x+t.r,0),gl=Math.abs(trades.filter(t=>t.r<0).reduce((x,t)=>x+t.r,0));return {mode:key,trades:trades.length,wins,losses,winRate:trades.length?wins/trades.length*100:0,netR:equityR,profitFactor:gl?gw/gl:Infinity,maxDD,expectancy:trades.length?equityR/trades.length:0};
+    })(); return r;
+  }
+  return _origRunBacktest(a,key,bars);
+};
+
+renderModeGrid();
+renderPaperStats();
+const modeSwitch=$('swModeProtection'); if(modeSwitch) modeSwitch.classList.toggle('on',state.modeProtection);
 if("serviceWorker" in navigator){
   window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(()=>{}));
 }
