@@ -40,6 +40,9 @@ button{font-family:'Rajdhani',sans-serif; font-weight:700; letter-spacing:.5px; 
 .btn-ghost{background:transparent; border:1px solid var(--line); color:var(--txt);}
 .btn-buy{background:var(--green); color:#00281c;}
 .btn-sell{background:var(--red); color:#2a0010;}
+.btn-buy:disabled,.btn-sell:disabled{opacity:.4; filter:grayscale(0.6);}
+#liveHeartbeat .dot{display:inline-block; width:6px; height:6px; border-radius:50%; background:#22d3ee; margin-right:5px; animation:pulseDot 1.4s ease-in-out infinite;}
+@keyframes pulseDot{0%,100%{opacity:.3;}50%{opacity:1;}}
 .btn-danger{background:transparent; border:1px solid var(--red); color:var(--red);}
 .btn-warn{background:transparent; border:1px solid var(--gold); color:var(--gold);}
 .small{font-size:11px; color:var(--dim); line-height:1.5;}
@@ -332,6 +335,7 @@ a{color:var(--cyan);}
         <div class="signalbig">
           <div class="sig WAIT" id="sigText">WAIT</div>
           <div class="small" id="sigPrice">price —</div>
+          <div class="small" id="liveHeartbeat" style="margin-top:2px;opacity:.6;">● live</div>
           <div class="confbar"><div id="confFill" style="width:0%"></div></div>
           <div class="small" id="confText">confirmation score —</div>
           <div class="small" id="leanText" style="margin-top:6px; opacity:.85;"></div>
@@ -374,8 +378,8 @@ a{color:var(--cyan);}
         <p class="small" id="bnAmountHint" hidden></p>
         <p class="small" id="bnNoSlTpNote" hidden>Binance BUY/SELL here are plain market orders — no automatic stop loss/take profit yet. Close manually or via the signal reversing.</p>
         <div class="row" style="margin-top:14px;">
-          <button class="btn-buy" onclick="manualTrade('BUY')">BUY</button>
-          <button class="btn-sell" onclick="manualTrade('SELL')">SELL</button>
+          <button class="btn-buy" id="btnManualBuy" onclick="manualTrade('BUY')">BUY</button>
+          <button class="btn-sell" id="btnManualSell" onclick="manualTrade('SELL')">SELL</button>
         </div>
       </div>
 
@@ -1874,10 +1878,33 @@ function renderBotView(a){
   }
 
   $('sigPrice').textContent = a.lastPrice ? ('price ' + a.lastPrice.toFixed(a.full?a.full.digits:5)) : 'waiting for price...';
+  const hb = $('liveHeartbeat');
+  if(hb) hb.innerHTML = '<span class="dot"></span>live · updated ' + new Date().toLocaleTimeString([], {hour12:true, hour:'2-digit', minute:'2-digit', second:'2-digit'});
   const plan=modePlan(a), mh=$('modePlanHint');
   if(mh) mh.textContent = mode().label+' · '+mode().trendTf+'m trend → '+mode().setupTf+'m setup → '+mode().entryTf+'m entry · ATR SL '+mode().atrSL+'× / TP '+mode().atrTP+'× · Max hold '+formatHold(mode().maxHoldMs)+(state.modeProtection?' · AUTO PROTECTION ON':' · CUSTOM PROTECTION');
   const mt=$('botSubtitle'); if(mt) mt.textContent = a.label+' · '+a.name+' · '+mode().label;
   if(state.modeProtection){ $('inSL').value=plan.sl||a.defSL; $('inTP').value=plan.tp||a.defTP; }
+
+  const buyBtn=$('btnManualBuy'), sellBtn=$('btnManualSell');
+  if(buyBtn && sellBtn){
+    // Buttons used to silently no-op via a log line when a position was already
+    // open — easy to mistake for the app hanging. Now they visibly disable and
+    // say why instead of just doing nothing.
+    const sameSideBuy = a.position && a.position.side==='BUY';
+    const sameSideSell = a.position && a.position.side==='SELL';
+    if(a.position && state.broker!=='binance'){
+      // cTrader: any new order is blocked until the current position is closed.
+      buyBtn.disabled = true; sellBtn.disabled = true;
+    } else if(a.position){
+      // Binance: same side is a no-op, opposite side is how you close/flip.
+      buyBtn.disabled = !!sameSideBuy; sellBtn.disabled = !!sameSideSell;
+    } else {
+      buyBtn.disabled = false;
+      sellBtn.disabled = (state.broker==='binance' && state.bnMarketMode!=='futures'); // spot is long-only with no position
+    }
+    buyBtn.textContent = sameSideBuy ? 'IN POSITION' : 'BUY';
+    sellBtn.textContent = sameSideSell ? 'IN POSITION' : 'SELL';
+  }
 
   if(a.position){
     $('positionPanel').hidden = false;
