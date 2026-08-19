@@ -425,13 +425,15 @@ const PT = {
 const TRADE_MODES = {
   // Fast does NOT mean blind: the scalp still requires higher-timeframe bias,
   // setup agreement, acceptable spread/volatility and a live entry trigger.
-  // minScore / momentumMin tuned down from stock defaults (was 80 / 0.015) to fire
-  // more often; extension cap, RSI band and ATR SL/TP are UNCHANGED — those are what
-  // keep a fired trade safe, so they stay strict even as entry frequency goes up.
-  scalping:{label:'Scalping',desc:'Fast live entries using M15 bias + M5 setup + live M1 trigger. Re-enters quickly after a completed trade.',trendTf:15,setupTf:5,entryTf:1,atrTf:1,atrSL:1.05,atrTP:1.45,minScore:72,streak:1,cooldownMs:5*1000,maxHoldMs:20*60*1000,rsiHigh:56,rsiLow:44,momentumMin:0.010,extension:1.8,liveEntry:true},
-  day:{label:'Day Trading',desc:'Fast intraday entries using H1 bias + M15 setup + live M5 trigger.',trendTf:60,setupTf:15,entryTf:5,atrTf:5,atrSL:1.35,atrTP:2.10,minScore:71,streak:1,cooldownMs:30*1000,maxHoldMs:12*60*60*1000,rsiHigh:55,rsiLow:45,momentumMin:0.008,extension:2.2,liveEntry:true},
-  swing:{label:'Swing Trading',desc:'Stronger multi-hour setups using H1/H4 context and M15/M5 entries.',trendTf:240,setupTf:60,entryTf:15,atrTf:15,atrSL:1.8,atrTP:3.0,minScore:70,streak:1,cooldownMs:10*60*1000,maxHoldMs:3*24*60*60*1000,rsiHigh:54,rsiLow:46,momentumMin:0.006,extension:2.7,liveEntry:true},
-  position:{label:'Position Trading',desc:'Longer trend-following entries using H4 bias + H1 setup + live H1 trigger.',trendTf:240,setupTf:60,entryTf:60,atrTf:60,atrSL:2.1,atrTP:3.8,minScore:68,streak:1,cooldownMs:60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.003,extension:3.2,liveEntry:true}
+  // minScore / momentumMin tuned down again (was 72/0.010) for faster firing.
+  // UNCHANGED on purpose, because these are what keep a fired trade safe rather
+  // than just frequent: atrSL/atrTP (stop & target sizing), rsiHigh/rsiLow (which
+  // side RSI has to lean), and extension (the overextension cap that blocks
+  // chasing a candle that's already run too far from fair value).
+  scalping:{label:'Scalping',desc:'Fast live entries using M15 bias + M5 setup + live M1 trigger. Re-enters quickly after a completed trade.',trendTf:15,setupTf:5,entryTf:1,atrTf:1,atrSL:1.05,atrTP:1.45,minScore:64,streak:1,cooldownMs:5*1000,maxHoldMs:20*60*1000,rsiHigh:56,rsiLow:44,momentumMin:0.006,extension:1.8,liveEntry:true},
+  day:{label:'Day Trading',desc:'Fast intraday entries using H1 bias + M15 setup + live M5 trigger.',trendTf:60,setupTf:15,entryTf:5,atrTf:5,atrSL:1.35,atrTP:2.10,minScore:64,streak:1,cooldownMs:30*1000,maxHoldMs:12*60*60*1000,rsiHigh:55,rsiLow:45,momentumMin:0.005,extension:2.2,liveEntry:true},
+  swing:{label:'Swing Trading',desc:'Stronger multi-hour setups using H1/H4 context and M15/M5 entries.',trendTf:240,setupTf:60,entryTf:15,atrTf:15,atrSL:1.8,atrTP:3.0,minScore:63,streak:1,cooldownMs:10*60*1000,maxHoldMs:3*24*60*60*1000,rsiHigh:54,rsiLow:46,momentumMin:0.004,extension:2.7,liveEntry:true},
+  position:{label:'Position Trading',desc:'Longer trend-following entries using H4 bias + H1 setup + live H1 trigger.',trendTf:240,setupTf:60,entryTf:60,atrTf:60,atrSL:2.1,atrTP:3.8,minScore:62,streak:1,cooldownMs:60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.002,extension:3.2,liveEntry:true}
 };
 function mode(){ return TRADE_MODES[state.tradeMode] || TRADE_MODES.scalping; }
 function tfBars(a, tf){ return tf===1?a.bars1:tf===5?a.bars5:tf===15?a.bars15:tf===60?a.bars60:a.bars240; }
@@ -1284,6 +1286,15 @@ function handleMessage(msg){
       break;
     case PT.ERROR_RES:
       connectStatus('API ERROR: ' + p.errorCode + (p.description ? (' — ' + p.description) : ''));
+      // If this error was the response to a pending history request, don't leave that
+      // symbol stuck waiting forever — clean it up so the 10s watchdog in ctFetchHistory
+      // doesn't double-fire, and immediately fall back to live-only warm-up.
+      if(msg.clientMsgId && pendingTrendbarRequests[msg.clientMsgId] !== undefined){
+        const symbolId = pendingTrendbarRequests[msg.clientMsgId];
+        delete pendingTrendbarRequests[msg.clientMsgId];
+        const a = Object.values(assets).find(x => x.symbolId === symbolId);
+        log((a?a.label:symbolId) + ': price history request failed (' + p.errorCode + ') — building from live ticks instead.');
+      }
       break;
     case PT.RECONCILE_RES:
       applyReconcile(p);
@@ -1358,7 +1369,7 @@ function ctAddAsset(key, label, name, bot, symbolId, defSL, defTP){
   ctFetchHistory(symbolId);
 }
 
-function ctFetchHistory(symbolId){
+function ctFetchHistory(symbolId, attempt){
   // Real historical M1 candles so trading doesn't need hours of live uptime to
   // "warm up" — without this, every reconnect (which happens whenever the tab
   // backgrounds) reset all higher-timeframe context back to zero.
@@ -1371,6 +1382,24 @@ function ctFetchHistory(symbolId){
     toTimestamp: now
   });
   if(msgId) pendingTrendbarRequests[msgId] = symbolId;
+  // The broker occasionally drops this request with no response at all (not even an
+  // ERROR_RES) rather than a clean failure. Previously that meant a symbol was stuck
+  // waiting on live-only warm-up (hours) with no retry and no visible explanation.
+  // Give it 10s, and if nothing came back, try again — up to 3 attempts — before
+  // falling back to live-only building so at least the reason is logged clearly.
+  setTimeout(() => {
+    if(msgId && pendingTrendbarRequests[msgId] !== undefined){
+      delete pendingTrendbarRequests[msgId];
+      const a = Object.values(assets).find(x => x.symbolId === symbolId);
+      const n = (attempt||1);
+      if(n < 3){
+        log('No response for ' + (a?a.label:symbolId) + ' price history (try ' + n + '/3) — retrying...');
+        ctFetchHistory(symbolId, n+1);
+      } else {
+        log((a?a.label:symbolId) + ': price history still unavailable after 3 tries — building from live ticks instead. Trend/Setup checks will warm up gradually over the next few minutes.');
+      }
+    }
+  }, 10000);
 }
 
 function applyHistoricalTrendbars(msg, p){
@@ -1599,16 +1628,23 @@ function updateIndicators(a){
 }
 
 function directionForBars(bars){
-  if(!bars || bars.length<50) return 'WAIT';
-  const e20=emaSeries(bars.map(x=>x.c),20), e50=emaSeries(bars.map(x=>x.c),50);
-  if(e20==null||e50==null) return 'WAIT';
-  if(e20>e50) return 'BUY'; if(e20<e50) return 'SELL'; return 'WAIT';
+  // EMA9/21 instead of EMA20/50: still a real, meaningful trend read (same pair
+  // already used for the fast M1 read), but only needs 21 completed candles to
+  // start working instead of 50 — on a 15m trend timeframe that's the difference
+  // between a ~5.25h live warm-up and a ~12.5h one if historical bars ever fail
+  // to load for a symbol.
+  if(!bars || bars.length<21) return 'WAIT';
+  const e9=emaSeries(bars.map(x=>x.c),9), e21=emaSeries(bars.map(x=>x.c),21);
+  if(e9==null||e21==null) return 'WAIT';
+  if(e9>e21) return 'BUY'; if(e9<e21) return 'SELL'; return 'WAIT';
 }
 function computeSignal(a){
   const m=mode();
   const trendBars=tfBars(a,m.trendTf)||[], setupBars=tfBars(a,m.setupTf)||[];
   const entryBars=(m.liveEntry ? liveBarsFor(a,m.entryTf) : tfBars(a,m.entryTf))||[];
-  const ready=trendBars.length>=50 && setupBars.length>=25 && entryBars.length>=25;
+  // Matches directionForBars' actual EMA21 requirement (was hardcoded to 50 here,
+  // which silently forced a much longer warm-up than the indicators themselves need).
+  const ready=trendBars.length>=21 && setupBars.length>=21 && entryBars.length>=21;
   if(!ready) return {direction:'WAIT',score:0,checks:[
     {label:'Warm-up for '+m.label,tag:'WAIT'},
     {label:'Trend ('+m.trendTf+'m)',tag:'WAIT'},
@@ -1637,13 +1673,13 @@ function computeSignal(a){
   const eSetup=emaSeries(setupBars.map(x=>x.c),20);
   const extension=eSetup&&atr>0?Math.abs(p-eSetup)/atr:0;
 
-  checks.push({label:'Trend ('+m.trendTf+'m)',tag:trend});
-  checks.push({label:'Setup / structure ('+m.setupTf+'m)',tag:setup===structure?setup:structure==='RANGE'?'RANGE':'WAIT'});
-  checks.push({label:'Live entry / liquidity ('+m.entryTf+'m)',tag:entryLiq});
-  checks.push({label:'Momentum',tag:momentumDir});
-  checks.push({label:'RSI ('+(r==null?'—':r.toFixed(0))+')',tag:rsiDir});
-  checks.push({label:'Volatility / spread',tag:volOK?'PASS':'BLOCK'});
-  checks.push({label:'Entry extension',tag:extension<=m.extension?'PASS':'HIGH'});
+  checks.push({label:'Trend ('+m.trendTf+'m)',tag:trend,detail:'EMA9/21'});
+  checks.push({label:'Setup / structure ('+m.setupTf+'m)',tag:setup===structure?setup:structure==='RANGE'?'RANGE':'WAIT',detail:structure});
+  checks.push({label:'Live entry / liquidity ('+m.entryTf+'m)',tag:entryLiq,detail:entryLiq});
+  checks.push({label:'Momentum',tag:momentumDir,detail:(mom>=0?'+':'')+mom.toFixed(3)+'% (need '+m.momentumMin+'%)'});
+  checks.push({label:'RSI',tag:rsiDir,detail:(r==null?'—':r.toFixed(1))+' (buy>'+m.rsiHigh+' / sell<'+m.rsiLow+')'});
+  checks.push({label:'Volatility / spread',tag:volOK?'PASS':'BLOCK',detail:spreadPct.toFixed(3)+'% (max '+state.risk.maxSpreadPct+'%)'});
+  checks.push({label:'Entry extension',tag:extension<=m.extension?'PASS':'HIGH',detail:extension.toFixed(2)+'× ATR (max '+m.extension+'×)'});
 
   let direction='WAIT',score=0;
   const trendOK=trend!=='WAIT' && trend===setup;
@@ -1757,23 +1793,25 @@ function renderBotView(a){
   const sig = computeSignal(a);
   a.lastSignal = sig; // always kept fresh — this is what auto-trade and manual BUY/SELL actually use
 
-  // Only the human-facing signal readout is throttled, so it's readable instead of flickering
-  // every tick. Price and open-position P&L below still update live every tick.
+  // Refreshed on nearly every tick now (was throttled to 2.5s) so the checks and
+  // score visibly move — RSI/momentum/extension numbers update live instead of
+  // just flipping between static WAIT labels. Still lightly throttled (350ms) so
+  // it stays readable instead of a flicker on very fast feeds.
   const now = Date.now();
-  if(!a.lastSignalRenderTime || now - a.lastSignalRenderTime >= 2500){
+  if(!a.lastSignalRenderTime || now - a.lastSignalRenderTime >= 350){
     a.lastSignalRenderTime = now;
     const sigEl = $('sigText');
     sigEl.textContent = sig.direction;
     sigEl.className = 'sig ' + sig.direction;
     $('confFill').style.width = sig.score + '%';
-    $('confText').textContent = 'confirmation score ' + sig.score + '/100';
+    $('confText').textContent = 'confirmation score ' + sig.score + '/100 · need ' + mode().minScore + '+';
 
     const list = $('checksList');
     list.innerHTML = '';
     sig.checks.forEach(c => {
       const row = document.createElement('div');
       row.className = 'check';
-      row.innerHTML = '<span>'+c.label+'</span><span class="tag '+c.tag+'">'+c.tag+'</span>';
+      row.innerHTML = '<span><b>'+c.label+'</b>'+(c.detail?'<br><small style="opacity:.6;">'+c.detail+'</small>':'')+'</span><span class="tag '+c.tag+'">'+c.tag+'</span>';
       list.appendChild(row);
     });
   }
