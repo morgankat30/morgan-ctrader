@@ -1290,10 +1290,15 @@ function handleMessage(msg){
       // symbol stuck waiting forever — clean it up so the 10s watchdog in ctFetchHistory
       // doesn't double-fire, and immediately fall back to live-only warm-up.
       if(msg.clientMsgId && pendingTrendbarRequests[msg.clientMsgId] !== undefined){
-        const symbolId = pendingTrendbarRequests[msg.clientMsgId];
+        const pending = pendingTrendbarRequests[msg.clientMsgId];
         delete pendingTrendbarRequests[msg.clientMsgId];
-        const a = Object.values(assets).find(x => x.symbolId === symbolId);
-        log((a?a.label:symbolId) + ': price history request failed (' + p.errorCode + ') — building from live ticks instead.');
+        const a = Object.values(assets).find(x => x.symbolId === pending.symbolId);
+        if(pending.attempt < 3){
+          log((a?a.label:pending.symbolId) + ': price history request failed (' + p.errorCode + ') — retrying...');
+          ctFetchHistory(pending.symbolId, pending.attempt+1);
+        } else {
+          log((a?a.label:pending.symbolId) + ': price history failed 3 times (' + p.errorCode + ') — using fast live warm-up instead.');
+        }
       }
       break;
     case PT.RECONCILE_RES:
@@ -1381,34 +1386,43 @@ function ctFetchHistory(symbolId, attempt){
     fromTimestamp: now - 4000*60000, // ~2.8 days of M1 bars — enough for H4-based styles too
     toTimestamp: now
   });
-  if(msgId) pendingTrendbarRequests[msgId] = symbolId;
-  // The broker occasionally drops this request with no response at all (not even an
-  // ERROR_RES) rather than a clean failure. Previously that meant a symbol was stuck
-  // waiting on live-only warm-up (hours) with no retry and no visible explanation.
-  // Give it 10s, and if nothing came back, try again — up to 3 attempts — before
-  // falling back to live-only building so at least the reason is logged clearly.
+  const n = attempt||1;
+  if(msgId) pendingTrendbarRequests[msgId] = {symbolId, attempt:n};
+  // The broker can fail this in three different ways: no response at all, an
+  // ERROR_RES, or a "successful" response with a genuinely empty bar list (common
+  // on some demo accounts for certain symbols) — that third case used to slip past
+  // retry entirely because a response DID arrive. All three now retry up to 3 times.
   setTimeout(() => {
     if(msgId && pendingTrendbarRequests[msgId] !== undefined){
       delete pendingTrendbarRequests[msgId];
       const a = Object.values(assets).find(x => x.symbolId === symbolId);
-      const n = (attempt||1);
       if(n < 3){
         log('No response for ' + (a?a.label:symbolId) + ' price history (try ' + n + '/3) — retrying...');
         ctFetchHistory(symbolId, n+1);
       } else {
-        log((a?a.label:symbolId) + ': price history still unavailable after 3 tries — building from live ticks instead. Trend/Setup checks will warm up gradually over the next few minutes.');
+        log((a?a.label:symbolId) + ': price history unavailable after 3 tries — using fast live warm-up instead.');
       }
     }
   }, 10000);
 }
 
 function applyHistoricalTrendbars(msg, p){
-  const symbolId = pendingTrendbarRequests[msg.clientMsgId];
+  const pending = pendingTrendbarRequests[msg.clientMsgId];
   delete pendingTrendbarRequests[msg.clientMsgId];
+  const symbolId = pending ? pending.symbolId : null;
   const a = symbolId != null ? Object.values(assets).find(x => x.symbolId === symbolId) : null;
   if(!a){ return; }
   const raw = p.trendbar || [];
-  if(!raw.length){ log('No historical data returned for ' + a.label + ' — will build from live ticks instead.'); return; }
+  if(!raw.length){
+    const n = pending ? pending.attempt : 1;
+    if(n < 3){
+      log('Empty price history for ' + a.label + ' (try ' + n + '/3) — retrying...');
+      ctFetchHistory(symbolId, n+1);
+    } else {
+      log(a.label + ': price history came back empty after 3 tries — using fast live warm-up instead.');
+    }
+    return;
+  }
   ensureArrays(a);
   const bars = raw.map(tb => {
     const low = (tb.low||0) / 100000;
@@ -1628,25 +1642,32 @@ function updateIndicators(a){
 }
 
 function directionForBars(bars){
-  // EMA9/21 instead of EMA20/50: still a real, meaningful trend read (same pair
-  // already used for the fast M1 read), but only needs 21 completed candles to
-  // start working instead of 50 — on a 15m trend timeframe that's the difference
-  // between a ~5.25h live warm-up and a ~12.5h one if historical bars ever fail
-  // to load for a symbol.
-  if(!bars || bars.length<21) return 'WAIT';
-  const e9=emaSeries(bars.map(x=>x.c),9), e21=emaSeries(bars.map(x=>x.c),21);
-  if(e9==null||e21==null) return 'WAIT';
-  if(e9>e21) return 'BUY'; if(e9<e21) return 'SELL'; return 'WAIT';
+  // Graceful degrade instead of a hard WAIT wall: with a full 21 bars use EMA9/21
+  // (the real read). With as few as 8 bars — e.g. only 8 M15 candles built live
+  // because historical load failed — fall back to a faster EMA3/8 read instead of
+  // blocking entirely. Still a genuine computed direction, just from less history,
+  // so it reads WAIT until 8 bars exist, never a made-up guess.
+  if(!bars || bars.length<8) return 'WAIT';
+  if(bars.length>=21){
+    const e9=emaSeries(bars.map(x=>x.c),9), e21=emaSeries(bars.map(x=>x.c),21);
+    if(e9==null||e21==null) return 'WAIT';
+    if(e9>e21) return 'BUY'; if(e9<e21) return 'SELL'; return 'WAIT';
+  }
+  const e3=emaSeries(bars.map(x=>x.c),3), e8=emaSeries(bars.map(x=>x.c),8);
+  if(e3==null||e8==null) return 'WAIT';
+  if(e3>e8) return 'BUY'; if(e3<e8) return 'SELL'; return 'WAIT';
 }
 function computeSignal(a){
   const m=mode();
   const trendBars=tfBars(a,m.trendTf)||[], setupBars=tfBars(a,m.setupTf)||[];
   const entryBars=(m.liveEntry ? liveBarsFor(a,m.entryTf) : tfBars(a,m.entryTf))||[];
-  // Matches directionForBars' actual EMA21 requirement (was hardcoded to 50 here,
-  // which silently forced a much longer warm-up than the indicators themselves need).
-  const ready=trendBars.length>=21 && setupBars.length>=21 && entryBars.length>=21;
+  // Matches directionForBars' actual minimum (it degrades gracefully from
+  // EMA9/21 down to EMA3/8, so 8 bars is the real floor — not 21 or 50).
+  // On M15 trend that's the difference between a 2h worst-case live warm-up and
+  // a 5.25h+ one if historical bars ever fail to load for a symbol.
+  const ready=trendBars.length>=8 && setupBars.length>=8 && entryBars.length>=8;
   if(!ready) return {direction:'WAIT',score:0,checks:[
-    {label:'Warm-up for '+m.label,tag:'WAIT'},
+    {label:'Warm-up for '+m.label,tag:'WAIT',detail:'trend '+trendBars.length+'/8 · setup '+setupBars.length+'/8 · entry '+entryBars.length+'/8 bars'},
     {label:'Trend ('+m.trendTf+'m)',tag:'WAIT'},
     {label:'Setup ('+m.setupTf+'m)',tag:'WAIT'},
     {label:'Live entry ('+m.entryTf+'m)',tag:'WAIT'},
@@ -1669,7 +1690,7 @@ function computeSignal(a){
   const body=Math.abs(candle.c-candle.o), range=Math.max(candle.h-candle.l,atr*0.05);
   const candleDir=candle.c>candle.o?'BUY':candle.c<candle.o?'SELL':'WAIT';
   const momentumDir=mom>m.momentumMin?'BUY':mom<-m.momentumMin?'SELL':'WAIT';
-  const rsiDir=r>m.rsiHigh?'BUY':r<m.rsiLow?'SELL':'WAIT';
+  const rsiDir=r==null?'WAIT':(r>m.rsiHigh?'BUY':r<m.rsiLow?'SELL':'WAIT');
   const eSetup=emaSeries(setupBars.map(x=>x.c),20);
   const extension=eSetup&&atr>0?Math.abs(p-eSetup)/atr:0;
 
@@ -1701,6 +1722,27 @@ function computeSignal(a){
     if(strength>0.30) score+=5;
     if(structure===direction) score+=4;
   }
+
+  // Fast RSI(6) extreme-band path — Scalping only. Separate from the confluence
+  // path above: it does NOT require trendOK/structureOK (full M15/M5 agreement),
+  // so it can fire before that confluence completes. It is still gated — never
+  // blind — by the same entryOK live-confirmation check, the same volatility/
+  // spread gate, and the same extension cap as every other entry in this engine.
+  let fastPath=false;
+  if(m.label==='Scalping' && direction==='WAIT'){
+    const rsiFast=rsiSeries(ec,6);
+    const fastDir=rsiFast==null?'WAIT':(rsiFast>80?'BUY':rsiFast<20?'SELL':'WAIT');
+    checks.push({label:'Fast RSI(6) extreme',tag:fastDir,detail:(rsiFast==null?'—':rsiFast.toFixed(1))+' (buy>80 / sell<20)'});
+    if(fastDir!=='WAIT' && fastDir===setup && entryOK && volOK && extension<=m.extension){
+      direction=setup; fastPath=true;
+      score=Math.max(m.minScore,58);
+      if(entryLiq===direction) score+=10;
+      if(rsiDir===direction) score+=6;
+      if(candleDir===direction) score+=5;
+      checks.push({label:'Fast-path trigger',tag:'FIRE',detail:'RSI(6) extreme + entry confirm, ahead of full trend confluence'});
+    }
+  }
+
   if(!volOK || extension>m.extension) score=0;
   score=Math.max(0,Math.min(100,Math.round(score)));
 
@@ -1709,7 +1751,7 @@ function computeSignal(a){
     else { a.lastStableDirection=direction; a.signalStreak=1; }
   } else { a.signalStreak=0; a.lastStableDirection='WAIT'; }
   const stable=a.signalStreak>=m.streak;
-  return {direction,score,checks,tradeReady:stable && score>=m.minScore && volOK && extension<=m.extension};
+  return {direction,score,checks,fastPath,tradeReady:stable && score>=m.minScore && volOK && extension<=m.extension};
 }
 
 function modePlan(a){
