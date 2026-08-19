@@ -304,6 +304,15 @@ a{color:var(--cyan);}
       </div>
 
       <div class="panel">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h2 style="margin:0;">Trade history</h2>
+          <button class="btn-danger" style="padding:6px 12px; font-size:12px;" onclick="deleteTradeHistory()">Delete history</button>
+        </div>
+        <p class="small" style="margin-top:6px;">Every closed trade, real or paper, stays here until you delete it — never removed automatically.</p>
+        <div id="tradeHistoryList" style="margin-top:8px;"></div>
+      </div>
+
+      <div class="panel">
         <h2>Trading assets</h2>
         <p class="small" id="symStatus">Loading symbols from your broker...</p>
         <div class="row" id="bnSearchRow" hidden style="margin-top:10px;">
@@ -398,6 +407,7 @@ const PT = {
   ORDER_ERROR_EVENT:2132,
   ERROR_RES:2142,
   GET_ACCOUNTS_REQ:2149, GET_ACCOUNTS_RES:2150,
+  GET_TRENDBARS_REQ:2137, GET_TRENDBARS_RES:2138,
   HEARTBEAT:51
 };
 
@@ -561,6 +571,8 @@ const BINANCE_CANDIDATES = [
 ];
 
 let ws=null, msgSeq=0, hbTimer=null;
+let wasEverConnected = false;
+let pendingTrendbarRequests = {}; // clientMsgId -> symbolId
 let symbolsByNorm = {};   // normalized name -> {symbolId, symbolName}
 let assets = {};          // key -> asset state object
 let currentAsset = null;
@@ -739,6 +751,8 @@ function showManualExchange(code, clientId, clientSecret, box, reason){
 }
 handleOAuthRedirect();
 updateForgetButtonVisibility();
+loadTradeHistory();
+renderTradeHistory();
 if($('relayHint')) $('relayHint').textContent = onRelayHost()
   ? 'You\'re on the Termux-hosted copy — Binance orders can go through directly.'
   : 'Tapping Binance will jump to http://localhost:8788 so real orders work — make sure binance_relay.py is running in Termux first.';
@@ -776,6 +790,7 @@ async function bnConnect(){
     const acct = await bnRelayCall('/api/binance/account', {});
     if(acct.error){ alert('Could not reach your account: ' + acct.error); setBadge('CONNECTION ERROR','off'); return; }
     state.accountReady = true;
+    wasEverConnected = true;
     state.moneyDigits = 2;
     bnApplyAccount(acct);
     setBadge(state.bnEnv === 'live' ? 'BINANCE LIVE · CONNECTED' : 'BINANCE TESTNET · CONNECTED', state.bnEnv === 'live' ? 'live' : 'demo');
@@ -1080,7 +1095,7 @@ async function bnExecuteTrade(a, side){
   try{
     if(!canSendRealOrders()){
       const m=mode(),atr=atrForTF(a,m.atrTf)||0;
-      if(closing){const pnl=a.position.floatingPnL||0;recordResult(pnl,true,a.position.mode);a.position=null;log('[PAPER] Closed '+a.label+' '+(pnl>=0?'+':'')+pnl.toFixed(2));}
+      if(closing){const pnl=a.position.floatingPnL||0;pushTradeHistory('Binance',a.label,a.position.side,a.position.entryPrice,a.lastPrice,pnl,true);recordResult(pnl,true,a.position.mode);a.position=null;log('[PAPER] Closed '+a.label+' '+(pnl>=0?'+':'')+pnl.toFixed(2));}
       else{
         const risk=atr*m.atrSL,reward=atr*m.atrTP,entry=a.lastPrice;
         a.position={side,entryPrice:entry,volume:quantity,paper:true,floatingPnL:0,openedAt:Date.now(),mode:state.tradeMode,atr,initialRisk:risk,stopLossPrice:side==='BUY'?entry-risk:entry+risk,takeProfitPrice:side==='BUY'?entry+reward:entry-reward,beArmed:false};
@@ -1096,7 +1111,7 @@ async function bnExecuteTrade(a, side){
     if(res.error||res.code<0){log('ORDER ERROR: '+(res.error||res.msg||JSON.stringify(res)));return;}
     const executedQty=parseFloat(res.executedQty||quantity),quote=parseFloat(res.cummulativeQuoteQty||0),avg=executedQty?quote/executedQty:a.lastPrice;
     log('FILLED '+side+' '+a.label+' qty='+executedQty+' avg='+avg);
-    if(closing){const old=a.position;const pnl=(avg-old.entryPrice)*(old.side==='BUY'?1:-1)*executedQty;recordResult(pnl,false,old.mode);a.position=null;a.lastTradeAt=Date.now();}
+    if(closing){const old=a.position;const pnl=(avg-old.entryPrice)*(old.side==='BUY'?1:-1)*executedQty;pushTradeHistory('Binance',a.label,old.side,old.entryPrice,avg,pnl,false);recordResult(pnl,false,old.mode);a.position=null;a.lastTradeAt=Date.now();}
     else{
       const m=mode(),atr=atrForTF(a,m.atrTf)||0,risk=atr*m.atrSL,reward=atr*m.atrTP;
       a.position={side,entryPrice:avg,volume:executedQty,paper:false,floatingPnL:0,openedAt:Date.now(),mode:state.tradeMode,atr,initialRisk:risk,stopLossPrice:side==='BUY'?avg-risk:avg+risk,takeProfitPrice:side==='BUY'?avg+reward:avg-reward,beArmed:false};
@@ -1117,7 +1132,7 @@ function bnCloseCurrentPosition(){
 }
 function bnCloseCurrentPositionFor(a){
   if(!a||!a.position||a.pendingOrder)return;
-  if(a.position.paper){const pnl=a.position.floatingPnL||0;recordResult(pnl,true,a.position.mode);a.position=null;if(currentAsset===a.key)renderBotView(a);return;}
+  if(a.position.paper){const pnl=a.position.floatingPnL||0;pushTradeHistory('Binance',a.label,a.position.side,a.position.entryPrice,a.lastPrice,pnl,true);recordResult(pnl,true,a.position.mode);a.position=null;if(currentAsset===a.key)renderBotView(a);return;}
   const closeSide=a.position.side==='BUY'?'SELL':'BUY';
   bnExecuteTrade(a,closeSide);
 }
@@ -1155,8 +1170,10 @@ function connectStatus(msg){
 }
 
 function send(payloadType, payload){
-  if(!ws || ws.readyState !== 1) return;
-  ws.send(JSON.stringify({clientMsgId:'m'+(msgSeq++), payloadType, payload}));
+  if(!ws || ws.readyState !== 1) return null;
+  const clientMsgId = 'm'+(msgSeq++);
+  ws.send(JSON.stringify({clientMsgId, payloadType, payload}));
+  return clientMsgId;
 }
 
 function setBadge(text, cls){
@@ -1189,6 +1206,7 @@ function handleMessage(msg){
     }
     case PT.ACC_AUTH_RES:
       state.accountReady = true;
+      wasEverConnected = true;
       setBadge(state.env === 'live' ? 'LIVE · CONNECTED' : 'DEMO · CONNECTED', state.env === 'live' ? 'live' : 'demo');
       send(PT.TRADER_REQ, {ctidTraderAccountId: state.accountId});
       send(PT.SYMBOLS_LIST_REQ, {ctidTraderAccountId: state.accountId});
@@ -1203,6 +1221,9 @@ function handleMessage(msg){
       break;
     case PT.SYMBOL_BY_ID_RES:
       applyFullSymbol((p.symbol || [])[0]);
+      break;
+    case PT.GET_TRENDBARS_RES:
+      applyHistoricalTrendbars(msg, p);
       break;
     case PT.SPOT_EVENT:
       onSpot(p);
@@ -1286,6 +1307,64 @@ function ctAddAsset(key, label, name, bot, symbolId, defSL, defTP){
   $('assetGrid').appendChild(card);
   send(PT.SYMBOL_BY_ID_REQ, {ctidTraderAccountId: state.accountId, symbolId:[symbolId]});
   send(PT.SUBSCRIBE_SPOTS_REQ, {ctidTraderAccountId: state.accountId, symbolId:[symbolId]});
+  ctFetchHistory(symbolId);
+}
+
+function ctFetchHistory(symbolId){
+  // Real historical M1 candles so trading doesn't need hours of live uptime to
+  // "warm up" — without this, every reconnect (which happens whenever the tab
+  // backgrounds) reset all higher-timeframe context back to zero.
+  const now = Date.now();
+  const msgId = send(PT.GET_TRENDBARS_REQ, {
+    ctidTraderAccountId: state.accountId,
+    symbolId,
+    period: 'M1',
+    fromTimestamp: now - 4000*60000, // ~2.8 days of M1 bars — enough for H4-based styles too
+    toTimestamp: now
+  });
+  if(msgId) pendingTrendbarRequests[msgId] = symbolId;
+}
+
+function applyHistoricalTrendbars(msg, p){
+  const symbolId = pendingTrendbarRequests[msg.clientMsgId];
+  delete pendingTrendbarRequests[msg.clientMsgId];
+  const a = symbolId != null ? Object.values(assets).find(x => x.symbolId === symbolId) : null;
+  if(!a){ return; }
+  const raw = p.trendbar || [];
+  if(!raw.length){ log('No historical data returned for ' + a.label + ' — will build from live ticks instead.'); return; }
+  ensureArrays(a);
+  const bars = raw.map(tb => {
+    const low = (tb.low||0) / 100000;
+    const open = low + (tb.deltaOpen||0) / 100000;
+    const high = low + (tb.deltaHigh||0) / 100000;
+    const close = low + (tb.deltaClose!=null ? tb.deltaClose : (tb.deltaOpen||0)) / 100000;
+    return {t: tb.utcTimestampInMinutes * 60000, o: open, h: high, l: low<=open&&low<=close ? low : Math.min(open,close,low), c: close};
+  }).sort((x,y) => x.t - y.t);
+  a.bars1 = bars.slice(-3000);
+  deriveHigherFromM1(a);
+  a.historicalLoaded = true;
+  log('Loaded ' + bars.length + ' minutes of real price history for ' + a.label + ' — no warm-up wait needed.');
+  if(currentAsset === a.key) renderBotView(a);
+}
+
+function deriveHigherFromM1(a){
+  ensureArrays(a);
+  const bucketInto = (minutes, target, maxLen) => {
+    const bucket = {};
+    a.bars1.forEach(x => {
+      const k = Math.floor(x.t/(minutes*60000))*(minutes*60000);
+      const q = bucket[k] || {t:k, o:x.o, h:x.h, l:x.l, c:x.c};
+      q.h = Math.max(q.h, x.h); q.l = Math.min(q.l, x.l); q.c = x.c;
+      bucket[k] = q;
+    });
+    const arr = Object.values(bucket).sort((x,y) => x.t - y.t);
+    target.length = 0;
+    arr.slice(-maxLen).forEach(x => target.push(x));
+  };
+  bucketInto(5, a.bars5, 160);
+  bucketInto(15, a.bars15, 160);
+  bucketInto(60, a.bars60, 160);
+  bucketInto(240, a.bars240, 120);
 }
 
 function ctAddSymbolSearch(){
@@ -1841,6 +1920,7 @@ function closeCurrentPosition(){
   if(state.broker === 'binance'){ bnCloseCurrentPosition(); return; }
   if(a.position.paper){
     log('[PAPER] Closed '+a.position.side+' '+a.label+' PnL '+(a.position.floatingPnL||0).toFixed(2));
+    pushTradeHistory(state.broker==='binance'?'Binance':'cTrader', a.label, a.position.side, a.position.entryPrice, a.lastPrice, a.position.floatingPnL||0, true);
     recordResult(a.position.floatingPnL||0, true);
     a.position = null;
     renderBotView(a);
@@ -1878,6 +1958,7 @@ function checkModeTimeExit(a){
   if(Date.now()-a.position.openedAt < positionMode.maxHoldMs) return;
   log('['+positionMode.label+'] Maximum holding time reached for '+a.label+' — closing position.');
   if(a.position.paper){
+    pushTradeHistory(state.broker==='binance'?'Binance':'cTrader', a.label, a.position.side, a.position.entryPrice, a.lastPrice, a.position.floatingPnL||0, true);
     recordResult(a.position.floatingPnL||0,true); a.position=null; if(currentAsset===a.key) renderBotView(a); return;
   }
   if(state.broker==='ctrader') send(PT.CLOSE_POSITION_REQ,{ctidTraderAccountId:state.accountId,positionId:a.position.positionId,volume:a.position.volume});
@@ -1908,6 +1989,7 @@ function onExecution(p){
       if(p.deal.closePositionDetail){
         const gp = p.deal.closePositionDetail.grossProfit / Math.pow(10, state.moneyDigits);
         log('Position closed. Realized P&L: '+(gp>=0?'+':'')+gp.toFixed(2));
+        if(a && a.position) pushTradeHistory('cTrader', a.label, a.position.side, a.position.entryPrice, p.deal.executionPrice, gp, false);
         recordResult(gp, false);
         if(a) a.position = null;
       }
@@ -2007,6 +2089,36 @@ async function runSelectedBacktest(){
   const r=runBacktestForMode(a,key,bars);
   if(r.error){ el.textContent='Backtest: '+r.error; return; }
   el.innerHTML='<b>'+mode().label+' · '+a.label+'</b><br>'+r.trades+' trades · '+r.winRate.toFixed(1)+'% win rate · Net '+(r.netR>=0?'+':'')+r.netR.toFixed(2)+'R · Expectancy '+(r.expectancy>=0?'+':'')+r.expectancy.toFixed(3)+'R · Profit factor '+(isFinite(r.profitFactor)?r.profitFactor.toFixed(2):'∞')+' · Max DD '+r.maxDD.toFixed(2)+'R';
+}
+
+let tradeHistory = [];
+function loadTradeHistory(){
+  try{ tradeHistory = JSON.parse(localStorage.getItem('morganai_trade_history') || '[]'); }
+  catch(e){ tradeHistory = []; }
+}
+function saveTradeHistoryToStorage(){
+  try{ localStorage.setItem('morganai_trade_history', JSON.stringify(tradeHistory.slice(-500))); }catch(e){}
+}
+function pushTradeHistory(broker, assetLabel, side, entryPrice, exitPrice, pnl, isPaper){
+  tradeHistory.push({time: Date.now(), broker, asset: assetLabel, side, entryPrice, exitPrice, pnl, isPaper});
+  saveTradeHistoryToStorage();
+  renderTradeHistory();
+}
+function renderTradeHistory(){
+  const el = $('tradeHistoryList');
+  if(!el) return;
+  if(!tradeHistory.length){ el.innerHTML = '<p class="small">No closed trades yet.</p>'; return; }
+  el.innerHTML = tradeHistory.slice().reverse().slice(0,150).map(t => {
+    const won = t.pnl >= 0;
+    return '<div class="check"><span>'+new Date(t.time).toLocaleString()+' · '+(t.isPaper?'[PAPER] ':'')+t.broker+' '+t.asset+' '+t.side+'</span>'+
+      '<span class="'+(won?'pos':'neg')+'" style="font-weight:700;">'+(won?'+':'')+t.pnl.toFixed(2)+'</span></div>';
+  }).join('');
+}
+function deleteTradeHistory(){
+  if(!confirm('Delete all trade history? This cannot be undone.')) return;
+  tradeHistory = [];
+  saveTradeHistoryToStorage();
+  renderTradeHistory();
 }
 
 function recordResult(pnlAmount, isPaper, modeKey){
@@ -2119,6 +2231,32 @@ const modeSwitch=$('swModeProtection'); if(modeSwitch) modeSwitch.classList.togg
 if("serviceWorker" in navigator){
   window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(()=>{}));
 }
+
+/* ---------------- Auto-reconnect ---------------- */
+// Mobile browsers kill/suspend background tabs, which drops the WebSocket(s).
+// When the tab becomes visible or gains focus again, reconnect automatically
+// using the credentials already in memory — no manual re-login needed.
+function attemptAutoReconnect(){
+  if(!wasEverConnected) return;
+  if(state.broker === 'ctrader'){
+    if(!ws || ws.readyState === 2 || ws.readyState === 3){
+      log('Reconnection needed — reconnecting to cTrader...', 'botLogs');
+      connect();
+    }
+  } else if(state.broker === 'binance'){
+    const anyDown = Object.keys(assets).some(k => {
+      const s = bnSockets[k];
+      return !s || s.readyState === 2 || s.readyState === 3;
+    });
+    if(anyDown){
+      log('Reconnection needed — reconnecting Binance price feeds...', 'botLogs');
+      Object.values(assets).forEach(a => bnSubscribe(a));
+    }
+  }
+}
+document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') attemptAutoReconnect(); });
+window.addEventListener('focus', attemptAutoReconnect);
+window.addEventListener('online', attemptAutoReconnect);
 </script>
 </body>
 </html>
