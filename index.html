@@ -345,6 +345,15 @@ a{color:var(--cyan);}
       </div>
 
       <div class="panel">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h2 style="margin:0;">Live chart</h2>
+          <span class="small" id="chartTfLabel">M1 · live</span>
+        </div>
+        <canvas id="priceChart" style="width:100%; height:220px; display:block; margin-top:8px; border-radius:10px; background:var(--panel2);"></canvas>
+        <p class="small" style="margin-top:6px;">Real M1 candles built from the live feed, same data the signal engine reads — not a placeholder.</p>
+      </div>
+
+      <div class="panel">
         <h2>Trade size &amp; protection</h2>
         <div class="toggle">
           <div><b>Mode-managed protection</b><div class="small">Automatically uses the selected style's ATR-based SL/TP for this pair. Turn off only if you want custom distances.</div></div>
@@ -416,10 +425,13 @@ const PT = {
 const TRADE_MODES = {
   // Fast does NOT mean blind: the scalp still requires higher-timeframe bias,
   // setup agreement, acceptable spread/volatility and a live entry trigger.
-  scalping:{label:'Scalping',desc:'Fast live entries using M15 bias + M5 setup + live M1 trigger. Re-enters quickly after a completed trade.',trendTf:15,setupTf:5,entryTf:1,atrTf:1,atrSL:1.05,atrTP:1.45,minScore:80,streak:1,cooldownMs:5*1000,maxHoldMs:20*60*1000,rsiHigh:56,rsiLow:44,momentumMin:0.015,extension:1.8,liveEntry:true},
-  day:{label:'Day Trading',desc:'Fast intraday entries using H1 bias + M15 setup + live M5 trigger.',trendTf:60,setupTf:15,entryTf:5,atrTf:5,atrSL:1.35,atrTP:2.10,minScore:78,streak:1,cooldownMs:30*1000,maxHoldMs:12*60*60*1000,rsiHigh:55,rsiLow:45,momentumMin:0.012,extension:2.2,liveEntry:true},
-  swing:{label:'Swing Trading',desc:'Stronger multi-hour setups using H1/H4 context and M15/M5 entries.',trendTf:240,setupTf:60,entryTf:15,atrTf:15,atrSL:1.8,atrTP:3.0,minScore:76,streak:1,cooldownMs:10*60*1000,maxHoldMs:3*24*60*60*1000,rsiHigh:54,rsiLow:46,momentumMin:0.008,extension:2.7,liveEntry:true},
-  position:{label:'Position Trading',desc:'Longer trend-following entries using H4 bias + H1 setup + live H1 trigger.',trendTf:240,setupTf:60,entryTf:60,atrTf:60,atrSL:2.1,atrTP:3.8,minScore:74,streak:1,cooldownMs:60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.004,extension:3.2,liveEntry:true}
+  // minScore / momentumMin tuned down from stock defaults (was 80 / 0.015) to fire
+  // more often; extension cap, RSI band and ATR SL/TP are UNCHANGED — those are what
+  // keep a fired trade safe, so they stay strict even as entry frequency goes up.
+  scalping:{label:'Scalping',desc:'Fast live entries using M15 bias + M5 setup + live M1 trigger. Re-enters quickly after a completed trade.',trendTf:15,setupTf:5,entryTf:1,atrTf:1,atrSL:1.05,atrTP:1.45,minScore:72,streak:1,cooldownMs:5*1000,maxHoldMs:20*60*1000,rsiHigh:56,rsiLow:44,momentumMin:0.010,extension:1.8,liveEntry:true},
+  day:{label:'Day Trading',desc:'Fast intraday entries using H1 bias + M15 setup + live M5 trigger.',trendTf:60,setupTf:15,entryTf:5,atrTf:5,atrSL:1.35,atrTP:2.10,minScore:71,streak:1,cooldownMs:30*1000,maxHoldMs:12*60*60*1000,rsiHigh:55,rsiLow:45,momentumMin:0.008,extension:2.2,liveEntry:true},
+  swing:{label:'Swing Trading',desc:'Stronger multi-hour setups using H1/H4 context and M15/M5 entries.',trendTf:240,setupTf:60,entryTf:15,atrTf:15,atrSL:1.8,atrTP:3.0,minScore:70,streak:1,cooldownMs:10*60*1000,maxHoldMs:3*24*60*60*1000,rsiHigh:54,rsiLow:46,momentumMin:0.006,extension:2.7,liveEntry:true},
+  position:{label:'Position Trading',desc:'Longer trend-following entries using H4 bias + H1 setup + live H1 trigger.',trendTf:240,setupTf:60,entryTf:60,atrTf:60,atrSL:2.1,atrTP:3.8,minScore:68,streak:1,cooldownMs:60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.003,extension:3.2,liveEntry:true}
 };
 function mode(){ return TRADE_MODES[state.tradeMode] || TRADE_MODES.scalping; }
 function tfBars(a, tf){ return tf===1?a.bars1:tf===5?a.bars5:tf===15?a.bars15:tf===60?a.bars60:a.bars240; }
@@ -572,6 +584,7 @@ const BINANCE_CANDIDATES = [
 
 let ws=null, msgSeq=0, hbTimer=null;
 let wasEverConnected = false;
+let ctReconnectTimer = null;
 let pendingTrendbarRequests = {}; // clientMsgId -> symbolId
 let symbolsByNorm = {};   // normalized name -> {symbolId, symbolName}
 let assets = {};          // key -> asset state object
@@ -820,13 +833,38 @@ function bnApplyAccount(acct){
     const asset=(acct.assets||[]).find(x=>x.asset==='USDT');
     state.balance=asset ? parseFloat(asset.walletBalance||asset.balance||0) : parseFloat(acct.totalWalletBalance||0);
     state.equity=asset ? parseFloat(asset.marginBalance||asset.walletBalance||0) : parseFloat(acct.totalMarginBalance||state.balance);
-    if(statusEl) statusEl.textContent='Binance Futures · USDT margin · updated '+new Date().toLocaleTimeString();
+    if(statusEl){
+      if(state.balance>0){
+        statusEl.textContent='Binance Futures · USDT margin · updated '+new Date().toLocaleTimeString();
+      } else {
+        // Zero USDT margin balance, but the account call itself succeeded — most likely
+        // this API key's funds sit in Spot, or on the wrong environment (Live vs Testnet).
+        statusEl.textContent='Futures USDT margin balance is $0. If you funded Spot instead, switch Market to Spot above, or move funds to the Futures wallet on Binance. Also double check Live vs Testnet matches where your funds actually are.';
+      }
+    }
   } else {
     if(!acct || !acct.balances){ if(statusEl) statusEl.textContent='Could not read Spot balances: '+JSON.stringify(acct).slice(0,150); return; }
     const usdt=acct.balances.find(b=>b.asset==='USDT');
     state.balance=usdt ? parseFloat(usdt.free)+parseFloat(usdt.locked) : 0;
     state.equity=state.balance;
-    if(statusEl) statusEl.textContent=usdt?'Binance Spot · updated '+new Date().toLocaleTimeString():'No USDT found in Spot.';
+    if(statusEl){
+      if(state.balance>0){
+        statusEl.textContent='Binance Spot · updated '+new Date().toLocaleTimeString();
+      } else {
+        // No USDT specifically. The account call succeeded, so the key/secret and
+        // Live-vs-Testnet selection are correct — the wallet just isn't holding USDT.
+        // Trades here are placed against USDT pairs (e.g. BTCUSDT), so list whatever
+        // non-zero assets ARE present so it's clear what needs converting to USDT,
+        // instead of the bot silently showing $0 with no explanation.
+        const nonZero=(acct.balances||[]).filter(b=>(parseFloat(b.free)+parseFloat(b.locked))>0).slice(0,5);
+        if(nonZero.length){
+          const list=nonZero.map(b=>b.asset+' '+(parseFloat(b.free)+parseFloat(b.locked)).toFixed(6)).join(', ');
+          statusEl.textContent='No USDT in this Spot wallet — found instead: '+list+'. Morgan trades USDT pairs (e.g. BTCUSDT), so convert some of this to USDT on Binance first, or the bot has nothing to size trades from.';
+        } else {
+          statusEl.textContent='This Spot wallet is empty (no assets found at all). Confirm you\'re connecting the same Live/Testnet environment your funds are actually sitting in.';
+        }
+      }
+    }
   }
   if(state.paperBalance==null) state.paperBalance=state.balance;
   updateBalanceDisplay();
@@ -1155,10 +1193,20 @@ function connect(){
     handleMessage(msg);
   };
   ws.onclose = (ev) => {
+    const hadFinishedConnecting = state.accountReady;
     state.connected = false; state.accountReady = false;
     clearInterval(hbTimer);
     setBadge('DISCONNECTED', 'off');
-    if(!state.accountReady) connectStatus('Connection closed before finishing (code ' + ev.code + '). Check your Client ID/Secret/Access Token are correct and try again.');
+    if(!hadFinishedConnecting){
+      connectStatus('Connection closed before finishing (code ' + ev.code + '). Check your Client ID/Secret/Access Token are correct and try again.');
+    } else if(wasEverConnected && !state.stopped){
+      // The session was live and dropped on its own (server idle-kick, network blip) rather
+      // than the user navigating away — reconnect immediately instead of waiting for a
+      // visibility/focus/online event that may never fire while the tab stays foregrounded.
+      connectStatus('Connection dropped (code ' + ev.code + ') — reconnecting...');
+      clearTimeout(ctReconnectTimer);
+      ctReconnectTimer = setTimeout(() => { if(!ws || ws.readyState === 2 || ws.readyState === 3) connect(); }, 1500);
+    }
   };
   ws.onerror = () => { setBadge('CONNECTION ERROR', 'off'); connectStatus('WebSocket error — connection failed.'); };
 }
@@ -1747,6 +1795,63 @@ function renderBotView(a){
   } else {
     $('positionPanel').hidden = true;
   }
+
+  drawPriceChart(a);
+}
+
+/* ---------------- Live chart (real M1 candles, no placeholder data) ---------------- */
+function drawPriceChart(a){
+  const cv = $('priceChart');
+  if(!cv || cv.offsetParent === null) return; // don't bother drawing while the panel is hidden
+  const ratio = window.devicePixelRatio || 1;
+  const cssW = cv.clientWidth || 320, cssH = cv.clientHeight || 220;
+  if(cv.width !== cssW*ratio) cv.width = cssW*ratio;
+  if(cv.height !== cssH*ratio) cv.height = cssH*ratio;
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(ratio,0,0,ratio,0,0);
+  ctx.clearRect(0,0,cssW,cssH);
+
+  // Same real candles the signal engine itself reads: completed M1 bars plus the
+  // currently-forming live bar synthesized from the latest ticks.
+  const bars = (typeof liveBarsFor==='function' ? liveBarsFor(a,1) : (a.bars1||[])).slice(-60);
+  if(bars.length < 2){
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = '12px sans-serif';
+    ctx.fillText('Waiting for enough live candles...', 10, cssH/2);
+    return;
+  }
+
+  let max = Math.max(...bars.map(b=>b.h)), min = Math.min(...bars.map(b=>b.l));
+  if(!(max>min)){ const mid=max||1; max=mid*1.0005; min=mid*0.9995; }
+  const pad = (max-min)*0.1 || max*0.001 || 1;
+  max += pad; min -= pad;
+  const range = max-min;
+  const topPad=6, botPad=6, plotH = cssH-topPad-botPad;
+  const bw = cssW/bars.length;
+  const yFor = v => topPad + plotH - ((v-min)/range)*plotH;
+
+  bars.forEach((b,i)=>{
+    const x = i*bw + bw/2;
+    const up = b.c >= b.o;
+    ctx.strokeStyle = up ? '#22c55e' : '#ef4444';
+    ctx.fillStyle = up ? '#22c55e' : '#ef4444';
+    ctx.lineWidth = Math.max(1, bw*0.08);
+    ctx.beginPath(); ctx.moveTo(x, yFor(b.h)); ctx.lineTo(x, yFor(b.l)); ctx.stroke();
+    const bodyW = Math.max(1.5, bw*0.6);
+    const yO=yFor(b.o), yC=yFor(b.c);
+    ctx.fillRect(x-bodyW/2, Math.min(yO,yC), bodyW, Math.max(1,Math.abs(yC-yO)));
+  });
+
+  if(a.lastPrice){
+    const y = yFor(a.lastPrice);
+    ctx.strokeStyle = 'rgba(34,211,238,0.65)';
+    ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cssW,y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#22d3ee';
+    ctx.font = '11px sans-serif';
+    ctx.fillText(a.lastPrice.toFixed(a.full?a.full.digits:5), 4, Math.max(10, y-4));
+  }
 }
 
 /* ---------------- Trading ---------------- */
@@ -2091,7 +2196,7 @@ async function runSelectedBacktest(){
   el.innerHTML='<b>'+mode().label+' · '+a.label+'</b><br>'+r.trades+' trades · '+r.winRate.toFixed(1)+'% win rate · Net '+(r.netR>=0?'+':'')+r.netR.toFixed(2)+'R · Expectancy '+(r.expectancy>=0?'+':'')+r.expectancy.toFixed(3)+'R · Profit factor '+(isFinite(r.profitFactor)?r.profitFactor.toFixed(2):'∞')+' · Max DD '+r.maxDD.toFixed(2)+'R';
 }
 
-let tradeHistory = [];
+var tradeHistory = [];
 function loadTradeHistory(){
   try{ tradeHistory = JSON.parse(localStorage.getItem('morganai_trade_history') || '[]'); }
   catch(e){ tradeHistory = []; }
