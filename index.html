@@ -2177,8 +2177,14 @@ function ctExecuteTrade(a, side){
   const plan=modePlan(a);
   const slDist = state.modeProtection ? (plan.sl||a.defSL) : (parseFloat($('inSL').value)||a.defSL);
   const tpDist = state.modeProtection ? (plan.tp||a.defTP) : (parseFloat($('inTP').value)||a.defTP);
-  const relSL = Math.round(slDist*100000);
-  const relTP = Math.round(tpDist*100000);
+  // relativeStopLoss/relativeTakeProfit must be scaled to THIS symbol's own decimal
+  // precision (cTrader's own `digits` field for it), not a hardcoded 5-digit forex
+  // assumption — that assumption is wrong for metals/indices/crypto CFDs (e.g.
+  // XAU/USD), which is exactly what produced "invalid precision" order errors.
+  const digits = a.full && a.full.digits != null ? a.full.digits : 5;
+  const priceScale = Math.pow(10, digits);
+  const relSL = Math.round(slDist*priceScale);
+  const relTP = Math.round(tpDist*priceScale);
   const minVol = a.full ? a.full.minVolume : 1000;
   const step = a.full ? (a.full.stepVolume||minVol) : minVol;
   // lotSize is the broker's own contract size for THIS symbol (units per lot, in cents,
