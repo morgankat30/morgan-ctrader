@@ -280,23 +280,17 @@ a{color:var(--cyan);}
       <div class="panel">
         <h2>Risk management</h2>
         <p class="small">Execution itself is already immediate — market orders on live ticks, no artificial delay. These settings control how much gets risked per trade, not how fast orders fire.</p>
-        <div class="toggle">
-          <div><b>Risk-based sizing</b><div class="small">Size each trade from your risk % below instead of a fixed amount. Off = use the manual amount in each bot screen.</div></div>
-          <div class="switch on" id="swRiskSizing" onclick="toggleRiskSizing()"></div>
-        </div>
+        <p class="small"><b>Sizing:</b> every trade uses the exact lot size (cTrader) / amount (Binance) you set on each bot's screen — not a % of balance. Set it once per symbol to match your broker's minimum (often 0.01 lot) or whatever size you actually want.</p>
         <div class="row" style="margin-top:10px;">
-          <div><label>Risk per trade (%)</label><input id="inRiskPct" type="number" step="0.1" min="0.1" value="1" onchange="updateRiskSetting('riskPct', this.value)"></div>
           <div><label>Daily loss limit (%)</label><input id="inDailyLoss" type="number" step="0.5" min="0.5" value="3" onchange="updateRiskSetting('dailyLossLimitPct', this.value)"></div>
-        </div>
-        <div class="row" style="margin-top:10px;">
           <div><label>Portfolio risk cap (%)</label><input id="inPortfolioCap" type="number" step="0.5" min="1" value="5" onchange="updateRiskSetting('portfolioRiskCapPct', this.value)"></div>
+        </div>
+        <div class="row" style="margin-top:10px;">
           <div><label>Breakeven trigger (%)</label><input id="inBreakeven" type="number" step="0.1" min="0.05" value="0.3" onchange="updateRiskSetting('breakevenTriggerPct', this.value)"></div>
-        </div>
-        <div class="row" style="margin-top:10px;">
           <div><label>Max spread (%)</label><input id="inMaxSpread" type="number" step="0.01" min="0.001" value="0.03" onchange="updateRiskSetting('maxSpreadPct', this.value)"></div>
-          <div><label>Max trades per day</label><input id="inMaxTrades" type="number" step="1" min="1" value="10" onchange="updateRiskSetting('maxTradesPerDay', this.value)"></div>
         </div>
         <div class="row" style="margin-top:10px;">
+          <div><label>Max trades per day</label><input id="inMaxTrades" type="number" step="1" min="1" value="10" onchange="updateRiskSetting('maxTradesPerDay', this.value)"></div>
           <div><label>Max losses in a row</label><input id="inMaxConsecLoss" type="number" step="1" min="1" value="3" onchange="updateRiskSetting('maxConsecutiveLosses', this.value)"></div>
           <div></div>
         </div>
@@ -340,6 +334,7 @@ a{color:var(--cyan);}
           <div class="small" id="sigPrice">price —</div>
           <div class="confbar"><div id="confFill" style="width:0%"></div></div>
           <div class="small" id="confText">confirmation score —</div>
+          <div class="small" id="leanText" style="margin-top:6px; opacity:.85;"></div>
         </div>
         <div class="checks" id="checksList"></div>
       </div>
@@ -349,8 +344,14 @@ a{color:var(--cyan);}
           <h2 style="margin:0;">Live chart</h2>
           <span class="small" id="chartTfLabel">M1 · live</span>
         </div>
-        <canvas id="priceChart" style="width:100%; height:220px; display:block; margin-top:8px; border-radius:10px; background:var(--panel2);"></canvas>
-        <p class="small" style="margin-top:6px;">Real M1 candles built from the live feed, same data the signal engine reads — not a placeholder.</p>
+        <div style="display:flex; gap:6px; margin-top:6px;">
+          <button class="btn-ghost" style="padding:4px 10px; font-size:12px;" onclick="chartZoom(a=>a*1.35)">− zoom out</button>
+          <button class="btn-ghost" style="padding:4px 10px; font-size:12px;" onclick="chartZoom(a=>a/1.35)">+ zoom in</button>
+          <button class="btn-ghost" style="padding:4px 10px; font-size:12px;" onclick="chartResetView()">⟳ live edge</button>
+        </div>
+        <canvas id="priceChart" style="width:100%; height:240px; display:block; margin-top:8px; border-radius:10px; background:var(--panel2); touch-action:none;"></canvas>
+        <div class="small" id="chartLegend" style="margin-top:6px; opacity:.8;"></div>
+        <p class="small" style="margin-top:6px;">Real M1 candles built from the live feed, same data the signal engine reads — not a placeholder. Drag to pan, scroll/pinch to zoom.</p>
       </div>
 
       <div class="panel">
@@ -430,7 +431,7 @@ const TRADE_MODES = {
   // than just frequent: atrSL/atrTP (stop & target sizing), rsiHigh/rsiLow (which
   // side RSI has to lean), and extension (the overextension cap that blocks
   // chasing a candle that's already run too far from fair value).
-  scalping:{label:'Scalping',desc:'Fast live entries using M15 bias + M5 setup + live M1 trigger. Re-enters quickly after a completed trade.',trendTf:15,setupTf:5,entryTf:1,atrTf:1,atrSL:1.05,atrTP:1.45,minScore:64,streak:1,cooldownMs:5*1000,maxHoldMs:20*60*1000,rsiHigh:56,rsiLow:44,momentumMin:0.006,extension:1.8,liveEntry:true},
+  scalping:{label:'Scalping',desc:'Fast live entries using M15 bias + M5 setup + live M1 trigger. Re-enters quickly after a completed trade.',trendTf:15,setupTf:5,entryTf:1,atrTf:1,atrSL:1.05,atrTP:1.45,minScore:64,streak:1,cooldownMs:5*1000,maxHoldMs:20*60*1000,rsiHigh:56,rsiLow:44,momentumMin:0.006,extension:2.5,liveEntry:true},
   day:{label:'Day Trading',desc:'Fast intraday entries using H1 bias + M15 setup + live M5 trigger.',trendTf:60,setupTf:15,entryTf:5,atrTf:5,atrSL:1.35,atrTP:2.10,minScore:64,streak:1,cooldownMs:30*1000,maxHoldMs:12*60*60*1000,rsiHigh:55,rsiLow:45,momentumMin:0.005,extension:2.2,liveEntry:true},
   swing:{label:'Swing Trading',desc:'Stronger multi-hour setups using H1/H4 context and M15/M5 entries.',trendTf:240,setupTf:60,entryTf:15,atrTf:15,atrSL:1.8,atrTP:3.0,minScore:63,streak:1,cooldownMs:10*60*1000,maxHoldMs:3*24*60*60*1000,rsiHigh:54,rsiLow:46,momentumMin:0.004,extension:2.7,liveEntry:true},
   position:{label:'Position Trading',desc:'Longer trend-following entries using H4 bias + H1 setup + live H1 trigger.',trendTf:240,setupTf:60,entryTf:60,atrTf:60,atrSL:2.1,atrTP:3.8,minScore:62,streak:1,cooldownMs:60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.002,extension:3.2,liveEntry:true}
@@ -480,9 +481,8 @@ let state = {
   wins:0, losses:0, balance:0, equity:0, paperBalance:null,
   paperStats: JSON.parse(localStorage.getItem('morgan_paper_stats') || '{}'),
   risk:{
-    riskPct:0.5, dailyLossLimitPct:2, portfolioRiskCapPct:3,
+    dailyLossLimitPct:2, portfolioRiskCapPct:3,
     breakevenTriggerPct:0.3, maxSpreadPct:0.08,
-    useRiskSizing:true,
     dailyLossUsed:0, dailyDateKey:'',
     maxTradesPerDay:10, dailyTradeCount:0,
     maxConsecutiveLosses:3, consecutiveLosses:0
@@ -1120,15 +1120,13 @@ async function bnExecuteTrade(a, side){
     const m=mode(),atr=atrForTF(a,m.atrTf)||0;
     const riskDist=atr*m.atrSL;
     if(!riskDist){log('Waiting for volatility data before sizing '+a.label+'.');return;}
-    const riskDollars=Math.max(0,state.balance*(state.risk.riskPct/100));
-    let notional=state.risk.useRiskSizing && futures ? (riskDollars/riskDist)*a.lastPrice : (parseFloat($('inVolMult').value)||5);
-    if(futures) notional=Math.max(notional, a.full.minNotional||5);
-    else notional=Math.max(notional,a.full.minNotional||5);
+    let notional=parseFloat($('inVolMult').value)||5;
+    notional=Math.max(notional,a.full.minNotional||5);
     const maxNotional=state.balance*(futures?0.50:0.10)*(state.bnLeverage||1);
     if(maxNotional>0)notional=Math.min(notional,maxNotional);
     quantity=bnRoundQty(notional/a.lastPrice,a.full.stepSize);
     if(quantity<a.full.minQty)quantity=bnRoundQty(a.full.minQty,a.full.stepSize)||a.full.minQty;
-    if(!quantity||!riskGate(a, futures?riskDollars:notional))return;
+    if(!quantity||!riskGate(a, notional))return;
   }
 
   a.pendingOrder=true;
@@ -1751,9 +1749,24 @@ function computeSignal(a){
     else { a.lastStableDirection=direction; a.signalStreak=1; }
   } else { a.signalStreak=0; a.lastStableDirection='WAIT'; }
   const stable=a.signalStreak>=m.streak;
-  return {direction,score,checks,fastPath,tradeReady:stable && score>=m.minScore && volOK && extension<=m.extension};
+  return {direction,score,checks,fastPath,tradeReady:stable && score>=m.minScore && volOK && extension<=m.extension,
+    lean:{trend,setup,entryLiq,volOK,extension,extCap:m.extension,rsiDir,momentumDir}};
 }
 
+// Turns a WAIT signal into a live, specific status line — what it's actually
+// leaning toward and exactly what's blocking it right now — instead of a bare
+// "WAIT" that looks frozen even though the engine is evaluating every tick.
+function leanMessage(sig){
+  if(sig.direction!=='WAIT') return (sig.fastPath?'Fired via fast RSI(6) path.':'Confluence reached — entering.');
+  const l=sig.lean; if(!l) return 'Evaluating…';
+  if(l.trend==='WAIT') return 'No clear 15m trend yet — reading price action.';
+  if(l.setup==='WAIT') return 'Trend leans '+l.trend+', 5m setup not confirming yet.';
+  if(l.trend!==l.setup) return 'Mixed: 15m trend '+l.trend+' vs 5m setup '+l.setup+' — waiting for agreement.';
+  if(!l.volOK) return l.trend+' bias, but spread/volatility filter is blocking entries right now.';
+  if(l.extension>l.extCap) return l.trend+' bias, but price is '+l.extension.toFixed(2)+'× ATR from EMA20 (max '+l.extCap+'×) — waiting for a pullback.';
+  if(l.entryLiq==='WAIT') return 'Leaning '+l.trend+', watching the live 1m candle for a trigger.';
+  return 'Leaning '+l.trend+' — building confirmation.';
+}
 function modePlan(a){
   const m=mode(), atr=atrForTF(a,m.atrTf);
   if(!atr) return {sl:a.defSL||0,tp:a.defTP||0,atr:0,mode:m};
@@ -1847,6 +1860,8 @@ function renderBotView(a){
     sigEl.className = 'sig ' + sig.direction;
     $('confFill').style.width = sig.score + '%';
     $('confText').textContent = 'confirmation score ' + sig.score + '/100 · need ' + mode().minScore + '+';
+    const leanEl = $('leanText');
+    if(leanEl) leanEl.textContent = leanMessage(sig);
 
     const list = $('checksList');
     list.innerHTML = '';
@@ -1877,9 +1892,36 @@ function renderBotView(a){
   }
 
   drawPriceChart(a);
+  initChartInteraction();
 }
 
 /* ---------------- Live chart (real M1 candles, no placeholder data) ---------------- */
+const CHART_MIN_BARS=15, CHART_MAX_BARS=240, CHART_DEFAULT_BARS=60;
+function chartViewFor(a){
+  if(!a.chartView) a.chartView={visibleBars:CHART_DEFAULT_BARS, barsBack:0};
+  return a.chartView;
+}
+function chartZoom(fn){
+  const a = currentAsset && assets[currentAsset]; if(!a) return;
+  const v = chartViewFor(a);
+  v.visibleBars = Math.round(Math.min(CHART_MAX_BARS, Math.max(CHART_MIN_BARS, fn(v.visibleBars))));
+  drawPriceChart(a);
+}
+function chartResetView(){
+  const a = currentAsset && assets[currentAsset]; if(!a) return;
+  chartViewFor(a).barsBack = 0;
+  drawPriceChart(a);
+}
+function emaLine(values, period){
+  // Full EMA series (not just the latest value) so it can be drawn as a line.
+  if(values.length < period) return values.map(()=>null);
+  const out = new Array(values.length).fill(null);
+  let e = values.slice(0,period).reduce((x,y)=>x+y,0)/period;
+  out[period-1]=e;
+  const k = 2/(period+1);
+  for(let i=period;i<values.length;i++){ e = values[i]*k + e*(1-k); out[i]=e; }
+  return out;
+}
 function drawPriceChart(a){
   const cv = $('priceChart');
   if(!cv || cv.offsetParent === null) return; // don't bother drawing while the panel is hidden
@@ -1892,18 +1934,26 @@ function drawPriceChart(a){
   ctx.clearRect(0,0,cssW,cssH);
 
   // Same real candles the signal engine itself reads: completed M1 bars plus the
-  // currently-forming live bar synthesized from the latest ticks.
-  const bars = (typeof liveBarsFor==='function' ? liveBarsFor(a,1) : (a.bars1||[])).slice(-60);
-  if(bars.length < 2){
+  // currently-forming live bar synthesized from the latest ticks. Keep a bigger
+  // buffer than we display so zoom/pan has real history to scroll into.
+  const all = (typeof liveBarsFor==='function' ? liveBarsFor(a,1) : (a.bars1||[])).slice(-500);
+  if(all.length < 2){
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.font = '12px sans-serif';
     ctx.fillText('Waiting for enough live candles...', 10, cssH/2);
     return;
   }
 
+  const view = chartViewFor(a);
+  const vb = Math.min(view.visibleBars, all.length);
+  const end = Math.max(vb, all.length - view.barsBack);
+  const start = Math.max(0, end - vb);
+  const bars = all.slice(start, end);
+  const atLiveEdge = view.barsBack<=0;
+
   let max = Math.max(...bars.map(b=>b.h)), min = Math.min(...bars.map(b=>b.l));
   if(!(max>min)){ const mid=max||1; max=mid*1.0005; min=mid*0.9995; }
-  const pad = (max-min)*0.1 || max*0.001 || 1;
+  const pad = (max-min)*0.12 || max*0.001 || 1;
   max += pad; min -= pad;
   const range = max-min;
   const topPad=6, botPad=6, plotH = cssH-topPad-botPad;
@@ -1922,6 +1972,39 @@ function drawPriceChart(a){
     ctx.fillRect(x-bodyW/2, Math.min(yO,yC), bodyW, Math.max(1,Math.abs(yC-yO)));
   });
 
+  // EMA9/21 overlay — the same trend read used by the signal engine, drawn over
+  // the visible window (computed on the full buffer so the lines don't warp at
+  // the left edge of a zoomed-in view).
+  const closes = all.map(b=>b.c);
+  const e9all = emaLine(closes,9), e21all = emaLine(closes,21);
+  const drawLine = (series, color) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.4; ctx.beginPath();
+    let started=false;
+    for(let i=start;i<end;i++){
+      const v = series[i]; if(v==null) continue;
+      const x = (i-start)*bw + bw/2, y = yFor(v);
+      if(!started){ ctx.moveTo(x,y); started=true; } else ctx.lineTo(x,y);
+    }
+    if(started) ctx.stroke();
+  };
+  drawLine(e9all, 'rgba(96,165,250,0.9)');
+  drawLine(e21all, 'rgba(251,191,36,0.9)');
+
+  // Open position: entry / SL / TP lines.
+  if(a.position){
+    const p=a.position;
+    const drawHLine=(price,color,label)=>{
+      if(!price) return;
+      const y=yFor(price);
+      ctx.strokeStyle=color; ctx.setLineDash([3,3]); ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cssW,y); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle=color; ctx.font='10px sans-serif'; ctx.fillText(label,cssW-64,Math.max(10,y-3));
+    };
+    drawHLine(p.entryPrice,'rgba(255,255,255,0.55)','ENTRY');
+    drawHLine(p.stopLossPrice,'rgba(239,68,68,0.75)','SL');
+    drawHLine(p.takeProfitPrice,'rgba(34,197,94,0.8)','TP');
+  }
+
   if(a.lastPrice){
     const y = yFor(a.lastPrice);
     ctx.strokeStyle = 'rgba(34,211,238,0.65)';
@@ -1932,16 +2015,83 @@ function drawPriceChart(a){
     ctx.font = '11px sans-serif';
     ctx.fillText(a.lastPrice.toFixed(a.full?a.full.digits:5), 4, Math.max(10, y-4));
   }
+
+  if(!atLiveEdge){
+    ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.font='10px sans-serif';
+    ctx.fillText('panned — tap "live edge" to follow price', 4, cssH-6);
+  }
+
+  // Legend: RSI(14), RSI(6), extension — same numbers the checks list shows,
+  // kept on the chart itself since that's what was asked for.
+  const r14 = rsiSeries(closes,14), r6 = rsiSeries(closes,6);
+  const legend = $('chartLegend');
+  if(legend){
+    legend.innerHTML =
+      '<span style="color:#60a5fa;">— EMA9</span> &nbsp; '+
+      '<span style="color:#fbbf24;">— EMA21</span> &nbsp; '+
+      'RSI14 '+(r14==null?'—':r14.toFixed(1))+' · RSI6 '+(r6==null?'—':r6.toFixed(1))+
+      ' · showing '+bars.length+' of '+all.length+' candles';
+  }
 }
+function initChartInteraction(){
+  const cv = $('priceChart'); if(!cv || cv._interactionBound) return;
+  cv._interactionBound = true;
+  let dragging=false, lastX=0;
+  const pointers = new Map();
+  let pinchStartDist=0, pinchStartBars=CHART_DEFAULT_BARS;
+
+  const activeAsset = () => currentAsset && assets[currentAsset];
+
+  cv.addEventListener('wheel', e=>{
+    e.preventDefault();
+    const dir = e.deltaY>0 ? 1.12 : 1/1.12;
+    chartZoom(v=>v*dir);
+  }, {passive:false});
+
+  cv.addEventListener('pointerdown', e=>{
+    cv.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pointers.size===1){ dragging=true; lastX=e.clientX; }
+    if(pointers.size===2){
+      dragging=false;
+      const pts=[...pointers.values()];
+      pinchStartDist = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y) || 1;
+      const a=activeAsset(); pinchStartBars = a ? chartViewFor(a).visibleBars : CHART_DEFAULT_BARS;
+    }
+  });
+  cv.addEventListener('pointermove', e=>{
+    if(!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    const a=activeAsset(); if(!a) return;
+    if(pointers.size===2){
+      const pts=[...pointers.values()];
+      const dist = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y) || 1;
+      const scale = pinchStartDist/dist; // fingers apart -> zoom in
+      const v=chartViewFor(a);
+      v.visibleBars = Math.round(Math.min(CHART_MAX_BARS, Math.max(CHART_MIN_BARS, pinchStartBars*scale)));
+      drawPriceChart(a);
+      return;
+    }
+    if(!dragging) return;
+    const dx = e.clientX - lastX; lastX = e.clientX;
+    const bw = cv.clientWidth / chartViewFor(a).visibleBars;
+    const barsMoved = dx / bw;
+    const v=chartViewFor(a);
+    v.barsBack = Math.max(0, Math.round(v.barsBack - barsMoved)); // drag right = look back in history
+    drawPriceChart(a);
+  });
+  const endPtr = e=>{ pointers.delete(e.pointerId); if(pointers.size<2) pinchStartDist=0; if(pointers.size===0) dragging=false; };
+  cv.addEventListener('pointerup', endPtr);
+  cv.addEventListener('pointercancel', endPtr);
+  cv.addEventListener('pointerleave', endPtr);
+  cv.addEventListener('dblclick', chartResetView);
+}
+
 
 /* ---------------- Trading ---------------- */
 
 function updateRiskSetting(key, val){
   state.risk[key] = parseFloat(val) || state.risk[key];
-}
-function toggleRiskSizing(){
-  state.risk.useRiskSizing = $('swRiskSizing').classList.toggle('on');
-  if(currentAsset) updateRiskSizingHint(assets[currentAsset]);
 }
 
 function toggleSwitch(which){
@@ -2037,15 +2187,9 @@ function ctExecuteTrade(a, side){
   const lotSize = a.full && a.full.lotSize ? a.full.lotSize : 10000000; // 10,000,000 = standard 1.00 FX lot, used only if symbol data hasn't loaded yet
 
   let volume, lotsUsed;
-  if(state.risk.useRiskSizing && slDist > 0){
-    const riskDollars = state.balance * (state.risk.riskPct/100);
-    const rawVolume = (riskDollars * 100) / slDist; // same approximation used for floating P&L elsewhere
-    volume = Math.max(minVol, Math.round(rawVolume/step)*step);
-  } else {
-    const lots = parseFloat($('inLotSize').value) || 0.01;
-    const rawVolume = lots * lotSize;
-    volume = Math.max(minVol, Math.round(rawVolume/step)*step);
-  }
+  const lots = parseFloat($('inLotSize').value) || 0.01;
+  const rawVolume = lots * lotSize;
+  volume = Math.max(minVol, Math.round(rawVolume/step)*step);
   lotsUsed = volume / lotSize;
   const prospectiveRisk = slDist * volume/100;
 
@@ -2081,19 +2225,18 @@ function ctExecuteTrade(a, side){
 function updateRiskSizingHint(a){
   const el = $('riskSizingHint');
   if(!el) return;
-  if(!state.risk.useRiskSizing){ el.textContent = ''; return; }
   if(state.broker === 'binance'){
-    const amt = state.balance * (state.risk.riskPct/100);
-    el.textContent = 'Risk-based sizing is on: next trade uses ~$' + amt.toFixed(2) + ' (' + state.risk.riskPct + '% of balance), not the field above.';
+    const amt = parseFloat($('inVolMult').value)||a.full&&a.full.minNotional||0;
+    el.textContent = 'Fixed sizing: every trade uses ~$' + amt.toFixed(2) + ' notional (the amount field above), not a % of balance.';
   } else {
     const slDist = parseFloat($('inSL').value) || a.defSL;
+    const lots = parseFloat($('inLotSize').value) || 0.01;
     const lotSize = a.full && a.full.lotSize ? a.full.lotSize : 10000000;
-    if(slDist > 0 && state.balance > 0){
-      const riskDollars = state.balance * (state.risk.riskPct/100);
-      const lots = (riskDollars*100/slDist) / lotSize;
-      el.textContent = 'Risk-based sizing is on: next trade uses ~' + lots.toFixed(2) + ' lots (risking ~$' + riskDollars.toFixed(2) + '), not the field above.';
+    if(slDist > 0){
+      const riskDollars = slDist * (lots*lotSize) / 100;
+      el.textContent = 'Fixed sizing: every trade uses ' + lots.toFixed(2) + ' lots (risking ~$' + riskDollars.toFixed(2) + ' at current SL), not a % of balance.';
     } else {
-      el.textContent = 'Risk-based sizing is on — lot size will be calculated automatically from your risk % and SL distance.';
+      el.textContent = 'Fixed sizing: every trade uses ' + lots.toFixed(2) + ' lots (the field above), not a % of balance.';
     }
   }
 }
