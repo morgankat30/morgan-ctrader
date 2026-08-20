@@ -435,15 +435,20 @@ const TRADE_MODES = {
   // than just frequent: atrSL/atrTP (stop & target sizing), rsiHigh/rsiLow (which
   // side RSI has to lean), and extension (the overextension cap that blocks
   // chasing a candle that's already run too far from fair value).
-  scalping:{label:'Scalping',desc:'Fast live entries using M15 bias + M5 setup + live M1 trigger. Re-enters quickly after a completed trade.',trendTf:15,setupTf:5,entryTf:1,atrTf:1,atrSL:1.05,atrTP:1.45,minScore:64,streak:1,cooldownMs:5*1000,maxHoldMs:20*60*1000,rsiHigh:56,rsiLow:44,momentumMin:0.006,extension:2.5,liveEntry:true},
-  day:{label:'Day Trading',desc:'Fast intraday entries using H1 bias + M15 setup + live M5 trigger.',trendTf:60,setupTf:15,entryTf:5,atrTf:5,atrSL:1.35,atrTP:2.10,minScore:64,streak:1,cooldownMs:30*1000,maxHoldMs:12*60*60*1000,rsiHigh:55,rsiLow:45,momentumMin:0.005,extension:2.2,liveEntry:true},
-  swing:{label:'Swing Trading',desc:'Stronger multi-hour setups using H1/H4 context and M15/M5 entries.',trendTf:240,setupTf:60,entryTf:15,atrTf:15,atrSL:1.8,atrTP:3.0,minScore:63,streak:1,cooldownMs:10*60*1000,maxHoldMs:3*24*60*60*1000,rsiHigh:54,rsiLow:46,momentumMin:0.004,extension:2.7,liveEntry:true},
-  position:{label:'Position Trading',desc:'Longer trend-following entries using H4 bias + H1 setup + live H1 trigger.',trendTf:240,setupTf:60,entryTf:60,atrTf:60,atrSL:2.1,atrTP:3.8,minScore:62,streak:1,cooldownMs:60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.002,extension:3.2,liveEntry:true}
+  // Upgraded per user-supplied "Fast scalping strategy" spec: M5 200-EMA trend
+  // filter (trendMode:'ema200' below) + live M1 EMA9/21 confirmation, closed
+  // candles only, 1.0-1.3x ATR stop / ~1.2-1.5R target, short max-hold so trades
+  // don't sit for many minutes. trendTf dropped 15->5 and setupTf dropped 5->1
+  // specifically to cut the higher-timeframe wait the user flagged as slow.
+  scalping:{label:'Scalping',desc:'Fast live entries using M5 200-EMA bias + live M1 EMA9/21 + momentum/RSI trigger. Re-enters quickly after a completed trade.',trendTf:5,setupTf:1,entryTf:1,atrTf:1,atrSL:1.15,atrTP:1.5,minScore:62,streak:1,cooldownMs:3*1000,maxHoldMs:8*60*1000,rsiHigh:56,rsiLow:44,momentumMin:0.006,extension:2.2,liveEntry:true,trendMode:'ema200',trendEmaPeriod:200},
+  day:{label:'Day Trading',desc:'Intraday entries using M5 trend/setup + live M1 trigger.',trendTf:5,setupTf:5,entryTf:1,atrTf:1,atrSL:1.35,atrTP:2.10,minScore:64,streak:1,cooldownMs:30*1000,maxHoldMs:12*60*60*1000,rsiHigh:55,rsiLow:45,momentumMin:0.005,extension:2.2,liveEntry:true},
+  swing:{label:'Swing Trading',desc:'Slower multi-hour setups using M5 trend/setup/entry only (no M15/H1/H4).',trendTf:5,setupTf:5,entryTf:5,atrTf:5,atrSL:1.8,atrTP:3.0,minScore:63,streak:1,cooldownMs:10*60*1000,maxHoldMs:3*24*60*60*1000,rsiHigh:54,rsiLow:46,momentumMin:0.004,extension:2.7,liveEntry:true},
+  position:{label:'Position Trading',desc:'Longer trend-following entries, still built on M5 only (no H1/H4) with wider stops/targets and slower re-entry.',trendTf:5,setupTf:5,entryTf:5,atrTf:5,atrSL:2.1,atrTP:3.8,minScore:62,streak:1,cooldownMs:60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.002,extension:3.2,liveEntry:true}
 };
 function mode(){ return TRADE_MODES[state.tradeMode] || TRADE_MODES.scalping; }
-function tfBars(a, tf){ return tf===1?a.bars1:tf===5?a.bars5:tf===15?a.bars15:tf===60?a.bars60:a.bars240; }
+function tfBars(a, tf){ return tf===1?a.bars1:a.bars5; }
 function atrForTF(a, tf){ return atrSeries(tfBars(a,tf),14) || a.atr || 0; }
-function modeWarmupBars(m){ return m.trendTf>=60?50:25; }
+function modeWarmupBars(m){ return 25; } // only 5m/1m exist now, so the >=60 H1+ branch is dead — always 25
 function liveBarsFor(a, tf){
   const base=(tfBars(a,tf)||[]).slice();
   const cur=a.currentBar;
@@ -914,7 +919,7 @@ function bnAddAsset(c){
     key:c.key, label:c.label, name:c.name, bot:c.bot, defSL:c.defSL, defTP:c.defTP,
     symbol:c.symbol, full:null, lastPrice:null, lastBid:null, lastAsk:null,
     closes:[], emaFast:null, emaSlow:null, position:null,
-    bars1:[], bars5:[], bars15:[], bars60:[], bars240:[],
+    bars1:[], bars5:[],
     currentBar:null, signalStreak:0, lastStableDirection:'WAIT',
     lastTradeAt:0, lastLossAt:0, lastSignal:null, dataReady:false,
     lastKlineUpdate:0, pendingOrder:false
@@ -989,7 +994,7 @@ function updateBnAmountHint(a){
 }
 
 async function bnSeedHistory(a){
-  const intervals = ['1m','5m','15m','1h','4h'];
+  const intervals = ['1m','5m'];
   try{
     const results = await Promise.all(intervals.map(async interval => {
       const res = await bnRelayCall('/api/binance/klines', {symbol:a.symbol, interval, limit:1000});
@@ -1004,9 +1009,6 @@ async function bnSeedHistory(a){
       }));
       if(interval==='1m') a.bars1=bars;
       else if(interval==='5m') a.bars5=bars;
-      else if(interval==='15m') a.bars15=bars;
-      else if(interval==='1h') a.bars60=bars;
-      else if(interval==='4h') a.bars240=bars;
     });
     const c=a.bars1.map(x=>x.c);
     a.closes=c.slice(-300);
@@ -1022,7 +1024,7 @@ function bnUpsertKline(a, interval, k){
     l:parseFloat(k.l), c:parseFloat(k.c), v:parseFloat(k.v||0),
     closed:!!k.x
   };
-  const target=interval==='1m'?a.bars1:interval==='5m'?a.bars5:interval==='15m'?a.bars15:interval==='1h'?a.bars60:a.bars240;
+  const target=interval==='1m'?a.bars1:a.bars5;
   const last=target[target.length-1];
   if(!last || last.t!==bar.t) target.push(bar); else target[target.length-1]=bar;
   if(target.length>250) target.splice(0,target.length-250);
@@ -1047,8 +1049,6 @@ function bnUpdateIndicators(a){
   const back=c[Math.max(0,c.length-6)];
   a.momentum=back?((c[c.length-1]-back)/back)*100:0;
   a.trend5=directionForBars(a.bars5);
-  a.trend15=directionForBars(a.bars15);
-  a.structure15=structureFor(a.bars15,5);
   a.liquidity=liquiditySignal(a.bars1,a.atr);
 }
 
@@ -1057,7 +1057,7 @@ function bnSubscribe(a){
     ? (state.bnMarketMode==='futures'?'wss://fstream.binance.com':'wss://stream.binance.com:9443')
     : (state.bnMarketMode==='futures'?'wss://stream.binancefuture.com':'wss://stream.testnet.binance.vision:9443');
   const sym=a.symbol.toLowerCase();
-  const streams=[sym+'@bookTicker',sym+'@kline_1m',sym+'@kline_5m',sym+'@kline_15m',sym+'@kline_1h',sym+'@kline_4h'].join('/');
+  const streams=[sym+'@bookTicker',sym+'@kline_1m',sym+'@kline_5m'].join('/');
   const url=host+'/stream?streams='+encodeURIComponent(streams);
   try{ if(bnSockets[a.key] && bnSockets[a.key].readyState<=1) bnSockets[a.key].close(); }catch(e){}
   const sock=new WebSocket(url);
@@ -1363,7 +1363,7 @@ function ctAddAsset(key, label, name, bot, symbolId, defSL, defTP){
   assets[key] = {
     key, label, name, bot, defSL, defTP,
     symbolId, full:null, lastPrice:null,
-    closes:[], emaFast:null, emaSlow:null, position:null, bars1:[], bars5:[], bars15:[], bars60:[], bars240:[], currentBar:null, signalStreak:0, lastStableDirection:'WAIT', lastTradeAt:0, lastLossAt:0, lastSignal:null
+    closes:[], emaFast:null, emaSlow:null, position:null, bars1:[], bars5:[], currentBar:null, signalStreak:0, lastStableDirection:'WAIT', lastTradeAt:0, lastLossAt:0, lastSignal:null
   };
   const card = document.createElement('div');
   card.className = 'assetcard';
@@ -1385,7 +1385,7 @@ function ctFetchHistory(symbolId, attempt){
     ctidTraderAccountId: state.accountId,
     symbolId,
     period: 'M1',
-    fromTimestamp: now - 4000*60000, // ~2.8 days of M1 bars — enough for H4-based styles too
+    fromTimestamp: now - 4000*60000, // ~2.8 days of M1 bars — enough for the 5m EMA(200) warm-up
     toTimestamp: now
   });
   const n = attempt||1;
@@ -1454,10 +1454,7 @@ function deriveHigherFromM1(a){
     target.length = 0;
     arr.slice(-maxLen).forEach(x => target.push(x));
   };
-  bucketInto(5, a.bars5, 160);
-  bucketInto(15, a.bars15, 160);
-  bucketInto(60, a.bars60, 160);
-  bucketInto(240, a.bars240, 120);
+  bucketInto(5, a.bars5, 220); // >=200 needed so Scalping's M5 EMA200 trend filter has real data, not a permanent WAIT
 }
 
 function ctAddSymbolSearch(){
@@ -1508,7 +1505,7 @@ function onSpot(p){
   const pc = $('price_'+a.key); if(pc) pc.textContent = mid.toFixed(a.full ? a.full.digits : 5);
 
   // Keep raw ticks only as a short execution buffer. Trading decisions are made
-  // from locally built M1/M5/M15 bars so a noisy quote cannot flip the strategy.
+  // from locally built M1/M5 bars so a noisy quote cannot flip the strategy.
   a.closes.push(mid);
   if(a.closes.length > 1000) a.closes.shift();
   updateBars(a, mid, Date.now());
@@ -1520,8 +1517,7 @@ function onSpot(p){
 }
 
 function ensureArrays(a){
-  a.bars1 = a.bars1 || []; a.bars5 = a.bars5 || []; a.bars15 = a.bars15 || [];
-  a.bars60 = a.bars60 || []; a.bars240 = a.bars240 || [];
+  a.bars1 = a.bars1 || []; a.bars5 = a.bars5 || [];
 }
 
 function pushBar(store, bar, max){
@@ -1541,8 +1537,9 @@ function updateBars(a, price, now){
   } else {
     b.h=Math.max(b.h,price); b.l=Math.min(b.l,price); b.c=price;
   }
-  // M5/M15 are rebuilt from recent M1 bars; H1/H4 are maintained incrementally
-  // so longer trading styles do not require storing tens of thousands of M1 candles.
+  // M5 is rebuilt live from recent M1 bars on every tick. Cap kept at 220 (not
+  // 160) so Scalping's M5 EMA(200) trend filter always has a full window —
+  // 15m/1h/4h bars removed entirely; bot trades 5m/1m only, everywhere.
   const completed = a.bars1;
   const makeTF = (minutes, target) => {
     const bucket = {};
@@ -1552,20 +1549,14 @@ function updateBars(a, price, now){
       q.h=Math.max(q.h,x.h); q.l=Math.min(q.l,x.l); q.c=x.c; bucket[k]=q;
     });
     const arr=Object.values(bucket).sort((x,y)=>x.t-y.t);
-    target.length=0; arr.slice(-160).forEach(x=>target.push(x));
+    target.length=0; arr.slice(-220).forEach(x=>target.push(x));
   };
-  makeTF(5,a.bars5); makeTF(15,a.bars15);
+  makeTF(5,a.bars5);
 }
 function updateHigherBars(a,b){
   ensureArrays(a);
-  const put=(minutes,target,max)=>{
-    const k=Math.floor(b.t/(minutes*60000))*(minutes*60000);
-    let q=target[target.length-1];
-    if(!q || q.t!==k){ q={t:k,o:b.o,h:b.h,l:b.l,c:b.c}; target.push(q); }
-    else { q.h=Math.max(q.h,b.h); q.l=Math.min(q.l,b.l); q.c=b.c; }
-    if(target.length>max) target.splice(0,target.length-max);
-  };
-  put(60,a.bars60,160); put(240,a.bars240,120);
+  // No-op: 15m/1h/4h support removed. M5 is rebuilt live in updateBars() above,
+  // M1 is pushed by the caller. Bot now trades 5m/1m only, everywhere.
 }
 
 function emaSeries(values, period){
@@ -1631,21 +1622,19 @@ function updateIndicators(a){
   const m=mode();
   a.ready = tfBars(a,m.trendTf).length>=modeWarmupBars(m) && tfBars(a,m.setupTf).length>=25 && tfBars(a,m.entryTf).length>=25;
   if(!a.ready){ a.rsi=null; a.structure=null; a.atr=null; return; }
-  const c1=a.bars1.map(x=>x.c), c5=a.bars5.map(x=>x.c), c15=a.bars15.map(x=>x.c);
+  const c1=a.bars1.map(x=>x.c), c5=a.bars5.map(x=>x.c);
   a.emaFast=emaSeries(c1,9); a.emaSlow=emaSeries(c1,21); a.rsi=rsiSeries(c1,14); a.atr=atrSeries(a.bars1,14);
   a.structure=structureFor(a.bars5,6);
   const base=c1[Math.max(0,c1.length-6)];
   a.momentum=base?((c1[c1.length-1]-base)/base)*100:0;
   a.trend5=emaSeries(c5,20)>emaSeries(c5,50)?'BUY':'SELL';
-  a.trend15=emaSeries(c15,20)>emaSeries(c15,50)?'BUY':'SELL';
-  a.structure15=structureFor(a.bars15,5);
   a.liquidity=liquiditySignal(a.bars1,a.atr);
-  a.strength5=trendStrength(a.bars5); a.strength15=trendStrength(a.bars15);
+  a.strength5=trendStrength(a.bars5);
 }
 
 function directionForBars(bars){
   // Graceful degrade instead of a hard WAIT wall: with a full 21 bars use EMA9/21
-  // (the real read). With as few as 8 bars — e.g. only 8 M15 candles built live
+  // (the real read). With as few as 8 bars — e.g. only 8 M5 candles built live
   // because historical load failed — fall back to a faster EMA3/8 read instead of
   // blocking entirely. Still a genuine computed direction, just from less history,
   // so it reads WAIT until 8 bars exist, never a made-up guess.
@@ -1659,13 +1648,26 @@ function directionForBars(bars){
   if(e3==null||e8==null) return 'WAIT';
   if(e3>e8) return 'BUY'; if(e3<e8) return 'SELL'; return 'WAIT';
 }
+// Price-vs-single-EMA trend read (used by Scalping's M5 200-EMA filter, per the
+// user's spec: "price above 200 EMA" = uptrend bias). Returns WAIT until enough
+// bars exist for a real EMA(period) — never guesses from a short series.
+function trendDirEmaPrice(bars, period){
+  if(!bars || bars.length<period) return 'WAIT';
+  const closes=bars.map(x=>x.c);
+  const e=emaSeries(closes,period);
+  if(e==null) return 'WAIT';
+  const last=closes[closes.length-1];
+  if(last>e) return 'BUY';
+  if(last<e) return 'SELL';
+  return 'WAIT';
+}
 function computeSignal(a){
   const m=mode();
   const trendBars=tfBars(a,m.trendTf)||[], setupBars=tfBars(a,m.setupTf)||[];
   const entryBars=(m.liveEntry ? liveBarsFor(a,m.entryTf) : tfBars(a,m.entryTf))||[];
   // Matches directionForBars' actual minimum (it degrades gracefully from
   // EMA9/21 down to EMA3/8, so 8 bars is the real floor — not 21 or 50).
-  // On M15 trend that's the difference between a 2h worst-case live warm-up and
+  // On M5 trend that's the difference between a short worst-case live warm-up and
   // a 5.25h+ one if historical bars ever fail to load for a symbol.
   const ready=trendBars.length>=8 && setupBars.length>=8 && entryBars.length>=8;
   if(!ready) return {direction:'WAIT',score:0,checks:[
@@ -1680,7 +1682,7 @@ function computeSignal(a){
   const p=a.lastPrice, atr=atrForTF(a,m.atrTf);
   const spreadPct=(a.lastBid&&a.lastAsk&&p)?((a.lastAsk-a.lastBid)/p)*100:0;
   const volOK=atr>0 && spreadPct<=state.risk.maxSpreadPct;
-  const trend=directionForBars(trendBars);
+  const trend = m.trendMode==='ema200' ? trendDirEmaPrice(trendBars, m.trendEmaPeriod||200) : directionForBars(trendBars);
   const setup=directionForBars(setupBars);
   const structure=structureFor(setupBars,Math.min(8,Math.max(4,Math.floor(setupBars.length/6))));
   const entryLiq=liquiditySignal(entryBars,atr);
@@ -1696,7 +1698,7 @@ function computeSignal(a){
   const eSetup=emaSeries(setupBars.map(x=>x.c),20);
   const extension=eSetup&&atr>0?Math.abs(p-eSetup)/atr:0;
 
-  checks.push({label:'Trend ('+m.trendTf+'m)',tag:trend,detail:'EMA9/21'});
+  checks.push({label:'Trend ('+m.trendTf+'m)',tag:trend,detail:m.trendMode==='ema200'?('price vs EMA'+(m.trendEmaPeriod||200)):'EMA9/21'});
   checks.push({label:'Setup / structure ('+m.setupTf+'m)',tag:setup===structure?setup:structure==='RANGE'?'RANGE':'WAIT',detail:structure});
   checks.push({label:'Live entry / liquidity ('+m.entryTf+'m)',tag:entryLiq,detail:entryLiq});
   checks.push({label:'Momentum',tag:momentumDir,detail:(mom>=0?'+':'')+mom.toFixed(3)+'% (need '+m.momentumMin+'%)'});
@@ -1726,7 +1728,7 @@ function computeSignal(a){
   }
 
   // Fast RSI(6) extreme-band path — Scalping only. Separate from the confluence
-  // path above: it does NOT require trendOK/structureOK (full M15/M5 agreement),
+  // path above: it does NOT require trendOK/structureOK (full M5/M1 agreement),
   // so it can fire before that confluence completes. It is still gated — never
   // blind — by the same entryOK live-confirmation check, the same volatility/
   // spread gate, and the same extension cap as every other entry in this engine.
@@ -1763,9 +1765,10 @@ function computeSignal(a){
 function leanMessage(sig){
   if(sig.direction!=='WAIT') return (sig.fastPath?'Fired via fast RSI(6) path.':'Confluence reached — entering.');
   const l=sig.lean; if(!l) return 'Evaluating…';
-  if(l.trend==='WAIT') return 'No clear 15m trend yet — reading price action.';
-  if(l.setup==='WAIT') return 'Trend leans '+l.trend+', 5m setup not confirming yet.';
-  if(l.trend!==l.setup) return 'Mixed: 15m trend '+l.trend+' vs 5m setup '+l.setup+' — waiting for agreement.';
+  const m=mode();
+  if(l.trend==='WAIT') return 'No clear '+m.trendTf+'m trend yet — reading price action.';
+  if(l.setup==='WAIT') return 'Trend leans '+l.trend+', '+m.setupTf+'m setup not confirming yet.';
+  if(l.trend!==l.setup) return 'Mixed: '+m.trendTf+'m trend '+l.trend+' vs '+m.setupTf+'m setup '+l.setup+' — waiting for agreement.';
   if(!l.volOK) return l.trend+' bias, but spread/volatility filter is blocking entries right now.';
   if(l.extension>l.extCap) return l.trend+' bias, but price is '+l.extension.toFixed(2)+'× ATR from EMA20 (max '+l.extCap+'×) — waiting for a pullback.';
   if(l.entryLiq==='WAIT') return 'Leaning '+l.trend+', watching the live 1m candle for a trigger.';
@@ -2391,7 +2394,7 @@ function backtestBarsFor(a, tf){ return tfBars(a,tf)||[]; }
 function barsThrough(bars, t){ return bars.filter(b=>b.t<=t); }
 function makeBacktestSnapshot(a, t){
   const x=Object.assign({},a);
-  x.bars1=barsThrough(a.bars1,t); x.bars5=barsThrough(a.bars5,t); x.bars15=barsThrough(a.bars15,t); x.bars60=barsThrough(a.bars60,t); x.bars240=barsThrough(a.bars240,t);
+  x.bars1=barsThrough(a.bars1,t); x.bars5=barsThrough(a.bars5,t);
   x.lastPrice=x.bars1.length?x.bars1[x.bars1.length-1].c:null;
   x.lastBid=x.lastPrice; x.lastAsk=x.lastPrice;
   x.signalStreak=0; x.lastStableDirection='WAIT'; x.lastSignal=null; x.position=null;
