@@ -1510,7 +1510,18 @@ function onSpot(p){
   if(a.closes.length > 1000) a.closes.shift();
   updateBars(a, mid, Date.now());
   updateIndicators(a);
-  if(a.position){ updateFloatingPnL(a); checkBreakevenCtrader(a); checkModeTimeExit(a); }
+  if(a.position){
+    try{
+      updateFloatingPnL(a);
+      checkBreakevenCtrader(a);
+      checkPaperExitCtrader(a);
+      checkModeTimeExit(a);
+    }catch(e){
+      // Guard so a bug here can never again silently kill renderBotView/maybeAutoTrade
+      // below for the entire life of a position (that's exactly what happened before).
+      log('Position monitor error for '+a.label+': '+e.message);
+    }
+  }
 
   if(currentAsset === a.key) renderBotView(a);
   maybeAutoTrade(a);
@@ -2311,11 +2322,59 @@ function trackPosition(a, posPayload){
     stopLossPrice,
     riskDollars: stopLossPrice ? Math.abs(entryPrice - stopLossPrice) * volume/100 : 0,
     beMoved: false,
+    paper: false,
     floatingPnL: 0
   };
   renderBotView(a);
 }
 
+// Was called on every tick but never defined — that crash was silently killing
+// renderBotView()/maybeAutoTrade() for the whole life of every open position
+// (nothing rendered, PnL froze, buttons stopped updating). Fixed here.
+function checkBreakevenCtrader(a){
+  const p=a.position;
+  if(!p || p.beMoved || !p.stopLossPrice) return;
+  const risk=Math.abs(p.entryPrice-p.stopLossPrice);
+  if(risk<=0) return;
+  const moved = p.side==='BUY' ? (a.lastPrice-p.entryPrice>=risk*0.8) : (p.entryPrice-a.lastPrice>=risk*0.8);
+  if(!moved) return;
+  p.beMoved=true;
+  p.stopLossPrice=p.entryPrice;
+  log('Breakeven armed for '+a.label+' — stop moved to entry.');
+  if(!p.paper && p.positionId){
+    send(PT.AMEND_POSITION_SLTP_REQ,{
+      ctidTraderAccountId: state.accountId,
+      positionId: p.positionId,
+      stopLoss: p.entryPrice,
+      takeProfit: p.takeProfitPrice
+    });
+  }
+}
+
+// cTrader paper positions had no client-side stop/target check at all — only the
+// 8-minute max-hold timer or a manual Close could ever end one. Real orders get
+// their SL/TP from the broker itself; paper trades need this done locally.
+function checkPaperExitCtrader(a){
+  const p=a.position;
+  if(!p || !p.paper) return;
+  if(p.side==='BUY'){
+    if(a.lastPrice<=p.stopLossPrice){ closePaperPositionCtrader(a,'stop'); return; }
+    if(a.lastPrice>=p.takeProfitPrice){ closePaperPositionCtrader(a,'target'); return; }
+  } else {
+    if(a.lastPrice>=p.stopLossPrice){ closePaperPositionCtrader(a,'stop'); return; }
+    if(a.lastPrice<=p.takeProfitPrice){ closePaperPositionCtrader(a,'target'); return; }
+  }
+}
+function closePaperPositionCtrader(a, reason){
+  const p=a.position;
+  const pnl=p.floatingPnL||0;
+  const label=(TRADE_MODES[p.mode]||mode()).label;
+  log('['+label+'] '+a.label+' '+p.side+' '+(reason==='stop'?'stop':'target')+' reached.');
+  pushTradeHistory('cTrader', a.label, p.side, p.entryPrice, a.lastPrice, pnl, true);
+  recordResult(pnl, true, p.mode);
+  a.position=null;
+  if(currentAsset===a.key) renderBotView(a);
+}
 function checkModeTimeExit(a){
   if(!a.position || !a.position.openedAt) return;
   const positionMode=TRADE_MODES[a.position.mode]||mode();
