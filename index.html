@@ -282,21 +282,13 @@ a{color:var(--cyan);}
 
       <div class="panel">
         <h2>Risk management</h2>
-        <p class="small">Execution itself is already immediate — market orders on live ticks, no artificial delay. These settings control how much gets risked per trade, not how fast orders fire.</p>
+        <p class="small">Execution itself is already immediate — market orders on live ticks, no artificial delay.</p>
         <p class="small"><b>Sizing:</b> every trade uses the exact lot size (cTrader) / amount (Binance) you set on each bot's screen — not a % of balance. Set it once per symbol to match your broker's minimum (often 0.01 lot) or whatever size you actually want.</p>
         <div class="row" style="margin-top:10px;">
-          <div><label>Daily loss limit (%)</label><input id="inDailyLoss" type="number" step="0.5" min="0.5" value="3" onchange="updateRiskSetting('dailyLossLimitPct', this.value)"></div>
-          <div><label>Portfolio risk cap (%)</label><input id="inPortfolioCap" type="number" step="0.5" min="1" value="5" onchange="updateRiskSetting('portfolioRiskCapPct', this.value)"></div>
-        </div>
-        <div class="row" style="margin-top:10px;">
-          <div><label>Breakeven trigger (%)</label><input id="inBreakeven" type="number" step="0.1" min="0.05" value="0.3" onchange="updateRiskSetting('breakevenTriggerPct', this.value)"></div>
-          <div><label>Max spread (%)</label><input id="inMaxSpread" type="number" step="0.01" min="0.001" value="0.03" onchange="updateRiskSetting('maxSpreadPct', this.value)"></div>
-        </div>
-        <div class="row" style="margin-top:10px;">
-          <div><label>Max trades per day</label><input id="inMaxTrades" type="number" step="1" min="1" value="10" onchange="updateRiskSetting('maxTradesPerDay', this.value)"></div>
-          <div><label>Max losses in a row</label><input id="inMaxConsecLoss" type="number" step="1" min="1" value="3" onchange="updateRiskSetting('maxConsecutiveLosses', this.value)"></div>
+          <div><label>Breakeven trigger (× risk, 0 = off)</label><input id="inBreakeven" type="number" step="0.1" min="0" value="0.8" onchange="updateRiskSetting('breakevenTriggerR', this.value)"></div>
           <div></div>
         </div>
+        <p class="small" style="margin-top:8px;">Once a trade is this many multiples of its own stop distance into profit, its stop moves to entry automatically. Set to 0 to turn breakeven off entirely.</p>
         <p class="small" id="dailyLossStatus" style="margin-top:8px;"></p>
       </div>
 
@@ -348,6 +340,7 @@ a{color:var(--cyan);}
           <h2 style="margin:0;">Live chart</h2>
           <span class="small" id="chartTfLabel">M1 · live</span>
         </div>
+        <div id="tfSelectorRow" style="display:flex; gap:6px; margin-top:6px;" hidden></div>
         <div style="display:flex; gap:6px; margin-top:6px;">
           <button class="btn-ghost" style="padding:4px 10px; font-size:12px;" onclick="chartZoom(a=>a*1.35)">− zoom out</button>
           <button class="btn-ghost" style="padding:4px 10px; font-size:12px;" onclick="chartZoom(a=>a/1.35)">+ zoom in</button>
@@ -355,16 +348,12 @@ a{color:var(--cyan);}
         </div>
         <canvas id="priceChart" style="width:100%; height:240px; display:block; margin-top:8px; border-radius:10px; background:var(--panel2); touch-action:none;"></canvas>
         <div class="small" id="chartLegend" style="margin-top:6px; opacity:.8;"></div>
-        <p class="small" style="margin-top:6px;">Real M1 candles built from the live feed, same data the signal engine reads — not a placeholder. Drag to pan, scroll/pinch to zoom.</p>
+        <p class="small" style="margin-top:6px;">Real candles built from the live feed, same data the signal engine reads — not a placeholder. Drag to pan, scroll/pinch to zoom.</p>
       </div>
 
       <div class="panel">
         <h2>Trade size &amp; protection</h2>
-        <div class="toggle">
-          <div><b>Mode-managed protection</b><div class="small">Automatically uses the selected style's ATR-based SL/TP for this pair. Turn off only if you want custom distances.</div></div>
-          <div class="switch on" id="swModeProtection" onclick="toggleModeProtection()"></div>
-        </div>
-        <p class="small" id="modePlanHint" style="margin-top:8px;"></p>
+        <p class="small">SL/TP below are plain price-distance numbers you set — nothing is auto-calculated or overwritten while you're viewing this pair.</p>
         <div class="row">
           <div id="volWrap"><label id="volLabel">Trade amount (USDT)</label><input id="inVolMult" type="number" min="1" value="1"></div>
           <div id="lotWrap" hidden><label>Lot size</label><input id="inLotSize" type="number" step="0.01" min="0.01" value="0.01"></div>
@@ -447,10 +436,20 @@ const TRADE_MODES = {
   scalping:{label:'Scalping',desc:'Fast live entries using M5 200-EMA bias + live M1 EMA9/21 + momentum/RSI trigger. Re-enters quickly after a completed trade.',trendTf:5,setupTf:1,entryTf:1,atrTf:1,atrSL:1.15,atrTP:1.5,minScore:62,streak:1,cooldownMs:3*1000,maxHoldMs:8*60*1000,rsiHigh:56,rsiLow:44,momentumMin:0.006,extension:2.8,liveEntry:true,trendMode:'ema200',trendEmaPeriod:200},
   day:{label:'Day Trading',desc:'Intraday entries using M5 trend/setup + live M1 trigger.',trendTf:5,setupTf:5,entryTf:1,atrTf:1,atrSL:1.35,atrTP:2.10,minScore:64,streak:1,cooldownMs:30*1000,maxHoldMs:12*60*60*1000,rsiHigh:55,rsiLow:45,momentumMin:0.005,extension:2.2,liveEntry:true},
   swing:{label:'Swing Trading',desc:'Slower multi-hour setups using M5 trend/setup/entry only (no M15/H1/H4).',trendTf:5,setupTf:5,entryTf:5,atrTf:5,atrSL:1.8,atrTP:3.0,minScore:63,streak:1,cooldownMs:10*60*1000,maxHoldMs:3*24*60*60*1000,rsiHigh:54,rsiLow:46,momentumMin:0.004,extension:2.7,liveEntry:true},
-  position:{label:'Position Trading',desc:'Longer trend-following entries, still built on M5 only (no H1/H4) with wider stops/targets and slower re-entry.',trendTf:5,setupTf:5,entryTf:5,atrTf:5,atrSL:2.1,atrTP:3.8,minScore:62,streak:1,cooldownMs:60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.002,extension:3.2,liveEntry:true}
+  position:{label:'Position Trading',desc:'Longer trend-following entries, still built on M5 only (no H1/H4) with wider stops/targets and slower re-entry.',trendTf:5,setupTf:5,entryTf:5,atrTf:5,atrSL:2.1,atrTP:3.8,minScore:62,streak:1,cooldownMs:60*60*1000,maxHoldMs:14*24*60*60*1000,rsiHigh:53,rsiLow:47,momentumMin:0.002,extension:3.2,liveEntry:true},
+  // EMA 5/13/89 strategy, per user spec: EMA5=fastest reaction, EMA13=confirmation
+  // (5/13 cross is the entry trigger), EMA89=trend filter (a Fibonacci period).
+  // Timeframe is whatever's picked in the chart's timeframe row (state.emaTf),
+  // not fixed per mode. "Ride" holds the whole trend, exiting only on a clean
+  // EMA5+EMA13 break back through EMA89. "Pullback" takes a fixed R:R target on
+  // every pullback and re-arms for the next one, all inside the same trend.
+  emaRide:{label:'EMA Trend — Ride', desc:'EMA5/13/89: one entry per trend, holds until EMA5+EMA13 break cleanly back through EMA89.', strategy:'emaTrend', emaSub:'ride', minScore:0, cooldownMs:5*1000, maxHoldMs:5*24*60*60*1000, liveEntry:true},
+  emaPullback:{label:'EMA Trend — Pullback', desc:'EMA5/13/89: same entries, but takes a 1:1.5 target on every pullback and re-arms while the trend continues.', strategy:'emaTrend', emaSub:'pullback', rMultiple:1.5, minScore:0, cooldownMs:5*1000, maxHoldMs:5*24*60*60*1000, liveEntry:true}
 };
 function mode(){ return TRADE_MODES[state.tradeMode] || TRADE_MODES.scalping; }
-function tfBars(a, tf){ return tf===1?a.bars1:a.bars5; }
+function tfBars(a, tf){
+  return tf===1?a.bars1:tf===5?a.bars5:tf===15?a.bars15:tf===30?a.bars30:tf===60?a.bars60:a.bars5;
+}
 function atrForTF(a, tf){ return atrSeries(tfBars(a,tf),14) || a.atr || 0; }
 function modeWarmupBars(m){ return 25; } // only 5m/1m exist now, so the >=60 H1+ branch is dead — always 25
 function liveBarsFor(a, tf){
@@ -486,7 +485,8 @@ const CANDIDATES = [
 let state = {
   broker:'ctrader',
   tradeMode:'scalping',
-  modeProtection:true,
+  modeProtection:false,
+  emaTf:5, // active timeframe (minutes) for the EMA 5/13/89 strategy: 1,5,15,30,60
   clientId:'', clientSecret:'', accessToken:'', refreshToken:'',
   env:'demo', accountId:null, moneyDigits:2,
   connected:false, accountReady:false,
@@ -494,11 +494,14 @@ let state = {
   wins:0, losses:0, balance:0, equity:0, paperBalance:null,
   paperStats: JSON.parse(localStorage.getItem('morgan_paper_stats') || '{}'),
   risk:{
-    dailyLossLimitPct:2, portfolioRiskCapPct:3,
-    breakevenTriggerPct:0.3, maxSpreadPct:0.08,
+    // Not shown in the UI anymore (per user request to drop % risk fields), but kept
+    // as fixed internal backstops — maxSpreadPct in particular is load-bearing inside
+    // the signal engine's own "Volatility/spread" confluence check, not just a gate.
+    dailyLossLimitPct:5, portfolioRiskCapPct:20,
+    breakevenTriggerR:0.8, maxSpreadPct:0.08,
     dailyLossUsed:0, dailyDateKey:'',
-    maxTradesPerDay:10, dailyTradeCount:0,
-    maxConsecutiveLosses:3, consecutiveLosses:0
+    maxTradesPerDay:9999, dailyTradeCount:0,
+    maxConsecutiveLosses:5, consecutiveLosses:0
   }
 };
 
@@ -511,6 +514,8 @@ state.bnProtection = localStorage.getItem('morgan_bn_protection') !== 'off';
 
 const savedMode=localStorage.getItem('morgan_trade_mode');
 if(savedMode && TRADE_MODES[savedMode]) state.tradeMode=savedMode;
+const savedEmaTf=parseInt(localStorage.getItem('morgan_ema_tf'),10);
+if([1,5,15,30,60].includes(savedEmaTf)) state.emaTf=savedEmaTf;
 function todayKey(){ return new Date().toISOString().slice(0,10); }
 function resetDailyIfNeeded(){
   const k = todayKey();
@@ -1367,7 +1372,7 @@ function ctAddAsset(key, label, name, bot, symbolId, defSL, defTP){
   assets[key] = {
     key, label, name, bot, defSL, defTP,
     symbolId, full:null, lastPrice:null,
-    closes:[], emaFast:null, emaSlow:null, position:null, bars1:[], bars5:[], currentBar:null, signalStreak:0, lastStableDirection:'WAIT', lastTradeAt:0, lastLossAt:0, lastSignal:null
+    closes:[], emaFast:null, emaSlow:null, position:null, bars1:[], bars5:[], bars15:[], bars30:[], bars60:[], currentBar:null, signalStreak:0, lastStableDirection:'WAIT', lastTradeAt:0, lastLossAt:0, lastSignal:null
   };
   const card = document.createElement('div');
   card.className = 'assetcard';
@@ -1389,7 +1394,7 @@ function ctFetchHistory(symbolId, attempt){
     ctidTraderAccountId: state.accountId,
     symbolId,
     period: 'M1',
-    fromTimestamp: now - 4000*60000, // ~2.8 days of M1 bars — enough for the 5m EMA(200) warm-up
+    fromTimestamp: now - 8640*60000, // ~6 days of M1 bars — covers 5m EMA(200) and, for the new EMA 5/13/89 strategy, a real EMA(89) even at the 1H timeframe (89 bars × 60min ≈ 3.7 days)
     toTimestamp: now
   });
   const n = attempt||1;
@@ -1458,7 +1463,7 @@ function deriveHigherFromM1(a){
     target.length = 0;
     arr.slice(-maxLen).forEach(x => target.push(x));
   };
-  bucketInto(5, a.bars5, 220); // >=200 needed so Scalping's M5 EMA200 trend filter has real data, not a permanent WAIT
+  TF_DEFS.forEach(def=>bucketInto(def.minutes, a[def.key], def.cap));
 }
 
 function ctAddSymbolSearch(){
@@ -1514,12 +1519,18 @@ function onSpot(p){
   if(a.closes.length > 1000) a.closes.shift();
   updateBars(a, mid, Date.now());
   updateIndicators(a);
+  // FIX: this used to only run inside renderBotView(), which itself only ran for
+  // whichever asset's screen you had open — every other pair's a.lastSignal went
+  // stale and maybeAutoTrade() below had nothing fresh to act on. Now computed
+  // for every asset on every tick regardless of which screen is open.
+  a.lastSignal = computeActiveSignal(a);
   if(a.position){
     try{
       updateFloatingPnL(a);
       checkBreakevenCtrader(a);
       maybeAddStackLeg(a);
       checkPaperExitCtrader(a);
+      checkEmaTrendExit(a);
       checkModeTimeExit(a);
     }catch(e){
       // Guard so a bug here can never again silently kill renderBotView/maybeAutoTrade
@@ -1534,6 +1545,7 @@ function onSpot(p){
 
 function ensureArrays(a){
   a.bars1 = a.bars1 || []; a.bars5 = a.bars5 || [];
+  a.bars15 = a.bars15 || []; a.bars30 = a.bars30 || []; a.bars60 = a.bars60 || [];
 }
 
 function pushBar(store, bar, max){
@@ -1542,37 +1554,41 @@ function pushBar(store, bar, max){
   if(store.length > max) store.splice(0, store.length-max);
 }
 
+// Every timeframe this bot can build off M1, in one place — used by both the live
+// per-tick rebuild below and the historical bootstrap in deriveHigherFromM1().
+// {minutes, targetKey, cap}. Cap sized so a real EMA(89) is always possible
+// (needs >=89 completed bars on that timeframe), plus headroom.
+const TF_DEFS = [
+  {minutes:5,  key:'bars5',  cap:220},
+  {minutes:15, key:'bars15', cap:150},
+  {minutes:30, key:'bars30', cap:150},
+  {minutes:60, key:'bars60', cap:150},
+];
+
 function updateBars(a, price, now){
   ensureArrays(a);
   const minute = Math.floor(now/60000)*60000;
   const b = a.currentBar;
   if(!b || b.t !== minute){
-    if(b){ a.bars1.push(b); updateHigherBars(a,b); }
+    if(b){ a.bars1.push(b); }
     a.currentBar = {t:minute,o:price,h:price,l:price,c:price};
     if(a.bars1.length > 3000) a.bars1.shift();
   } else {
     b.h=Math.max(b.h,price); b.l=Math.min(b.l,price); b.c=price;
   }
-  // M5 is rebuilt live from recent M1 bars on every tick. Cap kept at 220 (not
-  // 160) so Scalping's M5 EMA(200) trend filter always has a full window —
-  // 15m/1h/4h bars removed entirely; bot trades 5m/1m only, everywhere.
+  // All higher timeframes are rebuilt live from completed M1 bars on every tick.
   const completed = a.bars1;
-  const makeTF = (minutes, target) => {
+  TF_DEFS.forEach(def=>{
     const bucket = {};
     completed.forEach(x=>{
-      const k=Math.floor(x.t/(minutes*60000))*(minutes*60000);
+      const k=Math.floor(x.t/(def.minutes*60000))*(def.minutes*60000);
       const q=bucket[k] || {t:k,o:x.o,h:x.h,l:x.l,c:x.c};
       q.h=Math.max(q.h,x.h); q.l=Math.min(q.l,x.l); q.c=x.c; bucket[k]=q;
     });
     const arr=Object.values(bucket).sort((x,y)=>x.t-y.t);
-    target.length=0; arr.slice(-220).forEach(x=>target.push(x));
-  };
-  makeTF(5,a.bars5);
-}
-function updateHigherBars(a,b){
-  ensureArrays(a);
-  // No-op: 15m/1h/4h support removed. M5 is rebuilt live in updateBars() above,
-  // M1 is pushed by the caller. Bot now trades 5m/1m only, everywhere.
+    const target=a[def.key];
+    target.length=0; arr.slice(-def.cap).forEach(x=>target.push(x));
+  });
 }
 
 function emaSeries(values, period){
@@ -1775,6 +1791,73 @@ function computeSignal(a){
     lean:{trend,setup,entryLiq,volOK,extension,extCap:m.extension,rsiDir,momentumDir}};
 }
 
+// EMA 5/13/89 strategy engine, per user spec:
+//   EMA5  = fastest reaction line
+//   EMA13 = confirmation line — EMA5 crossing back over EMA13 (after a pullback)
+//           is the entry trigger
+//   EMA89 = trend filter (Fibonacci period) — both EMA5 and EMA13 must be on the
+//           same side of it for a trend to be "confirmed"
+// A pullback is EMA5/EMA13 coming close together or briefly crossing to the
+// opposite side, NOT price touching EMA89. Entry only fires after a pullback has
+// been seen, on a fresh EMA5-over-EMA13 cross (trend direction) confirmed by a
+// candle whose body is at least 40% of its range in that direction. Stop-loss is
+// placed just beyond EMA89 itself, exactly as specified.
+function computeEmaTrendSignal(a){
+  const m=mode();
+  const tf=state.emaTf||5;
+  const bars=tfBars(a,tf);
+  const closes=bars.map(x=>x.c);
+  if(closes.length<95){
+    return {direction:'WAIT',score:0,fastPath:false,tradeReady:false,
+      checks:[{label:'EMA 5/13/89 warm-up',tag:'WAIT',detail:closes.length+'/95 '+(tf===60?'H1':tf+'m')+' bars loaded'}]};
+  }
+  const ema5=emaSeries(closes,5), ema13=emaSeries(closes,13), ema89=emaSeries(closes,89);
+  const ema5p=emaSeries(closes.slice(0,-1),5), ema13p=emaSeries(closes.slice(0,-1),13);
+  if(ema5==null||ema13==null||ema89==null||ema5p==null||ema13p==null){
+    return {direction:'WAIT',score:0,fastPath:false,tradeReady:false,
+      checks:[{label:'EMA 5/13/89',tag:'WAIT',detail:'warming up'}]};
+  }
+
+  let trend='WAIT';
+  if(ema5>ema89 && ema13>ema89) trend='BUY';
+  else if(ema5<ema89 && ema13<ema89) trend='SELL';
+
+  a.emaState = a.emaState || {trend:'WAIT', pullback:false};
+  const st=a.emaState;
+  if(trend!==st.trend){ st.trend=trend; st.pullback=false; } // fresh trend (or lost it) — must see a new pullback before entering
+
+  const gap=Math.abs(ema5-ema13);
+  const closeEnough = gap <= closes[closes.length-1]*0.0006; // EMA5/13 touching/near-touching, price-relative tolerance
+  const oppositeCross = trend==='BUY' ? (ema5<=ema13) : trend==='SELL' ? (ema5>=ema13) : false;
+  if(trend!=='WAIT' && (closeEnough || oppositeCross)) st.pullback=true;
+
+  const bar=bars[bars.length-1];
+  const range=bar.h-bar.l;
+  const bodyOk = range>0 && (trend==='BUY' ? (bar.c>bar.o && (bar.c-bar.o)>=range*0.4)
+                                            : trend==='SELL' ? (bar.c<bar.o && (bar.o-bar.c)>=range*0.4) : false);
+  const crossBack = trend==='BUY' ? (ema5p<=ema13p && ema5>ema13) : trend==='SELL' ? (ema5p>=ema13p && ema5<ema13) : false;
+  const entryOK = trend!=='WAIT' && st.pullback && crossBack && bodyOk;
+
+  const checks=[
+    {label:'Trend filter (EMA5/13 vs EMA89)',tag:trend,detail:'EMA5 '+ema5.toFixed(5)+' · EMA13 '+ema13.toFixed(5)+' · EMA89 '+ema89.toFixed(5)},
+    {label:'Pullback seen',tag:trend==='WAIT'?'WAIT':(st.pullback?'YES':'WAIT'),detail:st.pullback?'EMA5/13 touched or briefly crossed':'watching for EMA5/EMA13 to come together'},
+    {label:'Entry trigger (EMA5 crosses back over EMA13)',tag:crossBack?trend:'WAIT',detail:crossBack?'fresh cross this candle':'no fresh cross yet'},
+    {label:'Confirmation candle',tag:bodyOk?trend:'WAIT',detail:bodyOk?'body ≥40% of range, in trend direction':'candle not decisive'}
+  ];
+
+  if(entryOK) st.pullback=false; // consumed — must see a fresh pullback before the next entry
+
+  return {direction:entryOK?trend:'WAIT', score:entryOK?100:0, checks, fastPath:false,
+    tradeReady:entryOK, ema89, emaTf:tf};
+}
+
+// Picks the right engine for whatever trading style is active. Called from the
+// per-tick handler for EVERY asset (not just the one on screen) so background
+// pairs actually get fresh signals — see the fix in onSpot() below.
+function computeActiveSignal(a){
+  return mode().strategy==='emaTrend' ? computeEmaTrendSignal(a) : computeSignal(a);
+}
+
 // Turns a WAIT signal into a live, specific status line — what it's actually
 // leaning toward and exactly what's blocking it right now — instead of a bare
 // "WAIT" that looks frozen even though the engine is evaluating every tick.
@@ -1801,11 +1884,17 @@ function renderModeGrid(){
   Object.entries(TRADE_MODES).forEach(([key,m])=>{
     const d=document.createElement('div'); d.className='modecard'+(state.tradeMode===key?' active':'');
     d.onclick=()=>setTradeMode(key);
-    d.innerHTML='<b>'+m.label+'</b><small>'+m.desc+'</small><span class="modebadge">'+m.minScore+'+ SCORE</span>';
+    const badge = m.strategy==='emaTrend' ? 'EMA 5/13/89' : (m.minScore+'+ SCORE');
+    d.innerHTML='<b>'+m.label+'</b><small>'+m.desc+'</small><span class="modebadge">'+badge+'</span>';
     grid.appendChild(d);
   });
   const m=mode();
-  const status=$('modeStatus'); if(status) status.textContent='ACTIVE: '+m.label+' · Bias '+m.trendTf+'m → Setup '+m.setupTf+'m → LIVE trigger '+m.entryTf+'m · Max hold '+formatHold(m.maxHoldMs)+' · Fast mode evaluates live market updates; no artificial signal delay.';
+  const status=$('modeStatus');
+  if(status){
+    status.textContent = m.strategy==='emaTrend'
+      ? 'ACTIVE: '+m.label+' · Timeframe '+(state.emaTf||5)+'m (change it in the chart panel) · Max hold '+formatHold(m.maxHoldMs)
+      : 'ACTIVE: '+m.label+' · Bias '+m.trendTf+'m → Setup '+m.setupTf+'m → LIVE trigger '+m.entryTf+'m · Max hold '+formatHold(m.maxHoldMs)+' · Fast mode evaluates live market updates; no artificial signal delay.';
+  }
 }
 function formatHold(ms){
   if(ms>=24*60*60*1000) return (ms/(24*60*60*1000)).toFixed(ms%(24*60*60*1000)?1:0)+'d';
@@ -1816,15 +1905,12 @@ function setTradeMode(key){
   if(!TRADE_MODES[key]) return;
   state.tradeMode=key;
   localStorage.setItem('morgan_trade_mode',key);
-  Object.values(assets).forEach(a=>{a.signalStreak=0;a.lastStableDirection='WAIT';a.lastSignal=null;});
+  Object.values(assets).forEach(a=>{a.signalStreak=0;a.lastStableDirection='WAIT';a.lastSignal=null;a.emaState=null;});
   renderModeGrid();
   renderPaperStats();
+  renderTfSelector();
   if(currentAsset) renderBotView(assets[currentAsset]);
   log('Trading style changed to '+mode().label+'. Existing positions keep their original mode plan. New entries use '+mode().label+'.');
-}
-function toggleModeProtection(){
-  state.modeProtection=$('swModeProtection').classList.toggle('on');
-  if(currentAsset) renderBotView(assets[currentAsset]);
 }
 
 /* ---------------- Bot view ---------------- */
@@ -1834,9 +1920,11 @@ function openBot(key){
   const a = assets[key];
   $('botTitle').textContent = a.bot;
   $('botSubtitle').textContent = a.label + ' · ' + a.name;
-  const plan=modePlan(a);
-  $('inSL').value = plan.sl ? plan.sl : a.defSL;
-  $('inTP').value = plan.tp ? plan.tp : a.defTP;
+  // Clean, round defaults every time — no ATR-derived long-decimal auto-fill.
+  // You can always type your own SL/TP; it will no longer get overwritten on
+  // the next tick like it used to (that was the actual bug).
+  $('inSL').value = a.defSL;
+  $('inTP').value = a.defTP;
   $('inMinScore').value = mode().minScore;
   const isBn = state.broker === 'binance';
   $('slWrap').hidden = isBn; $('tpWrap').hidden = isBn; $('bnNoSlTpNote').hidden = !isBn;
@@ -1847,13 +1935,17 @@ function openBot(key){
     $('inVolMult').value = a.full ? Math.max(1, a.full.minNotional) : 5;
     if(a.full) updateBnAmountHint(a); else $('bnAmountHint').textContent = 'Loading this pair\'s real Binance minimum...';
   } else {
-    const minLots = a.full && a.full.lotSize ? (a.full.minVolume / a.full.lotSize) : 0.01;
-    $('inLotSize').value = minLots.toFixed(2);
+    // Always defaults to 0.01 lots, unless the symbol's own broker minimum is
+    // actually bigger than that (then we have to use the real minimum or the
+    // order would just get rejected).
+    const brokerMin = a.full && a.full.lotSize ? (a.full.minVolume / a.full.lotSize) : 0.01;
+    $('inLotSize').value = Math.max(0.01, brokerMin).toFixed(2);
   }
   updateRiskSizingHint(a);
   $('dashboard').hidden = true;
   $('botView').hidden = false;
   $('botLogs').innerHTML = '';
+  renderTfSelector();
   log('Bot opened for ' + a.label + '. Warming up indicators from live ticks...');
   renderBotView(a);
 }
@@ -1868,7 +1960,7 @@ function showDashboard(){
 }
 
 function renderBotView(a){
-  const sig = computeSignal(a);
+  const sig = computeActiveSignal(a);
   a.lastSignal = sig; // always kept fresh — this is what auto-trade and manual BUY/SELL actually use
 
   // Refreshed on nearly every tick now (was throttled to 2.5s) so the checks and
@@ -1899,10 +1991,7 @@ function renderBotView(a){
   $('sigPrice').textContent = a.lastPrice ? ('price ' + a.lastPrice.toFixed(a.full?a.full.digits:5)) : 'waiting for price...';
   const hb = $('liveHeartbeat');
   if(hb) hb.innerHTML = '<span class="dot"></span>live · updated ' + new Date().toLocaleTimeString([], {hour12:true, hour:'2-digit', minute:'2-digit', second:'2-digit'});
-  const plan=modePlan(a), mh=$('modePlanHint');
-  if(mh) mh.textContent = mode().label+' · '+mode().trendTf+'m trend → '+mode().setupTf+'m setup → '+mode().entryTf+'m entry · ATR SL '+mode().atrSL+'× / TP '+mode().atrTP+'× · Max hold '+formatHold(mode().maxHoldMs)+(state.modeProtection?' · AUTO PROTECTION ON':' · CUSTOM PROTECTION');
   const mt=$('botSubtitle'); if(mt) mt.textContent = a.label+' · '+a.name+' · '+mode().label;
-  if(state.modeProtection){ $('inSL').value=plan.sl||a.defSL; $('inTP').value=plan.tp||a.defTP; }
 
   const buyBtn=$('btnManualBuy'), sellBtn=$('btnManualSell');
   if(buyBtn && sellBtn){
@@ -1958,6 +2047,28 @@ function chartResetView(){
   chartViewFor(a).barsBack = 0;
   drawPriceChart(a);
 }
+const EMA_TF_OPTIONS=[{m:1,l:'1m'},{m:5,l:'5m'},{m:15,l:'15m'},{m:30,l:'30m'},{m:60,l:'1H'}];
+function setEmaTf(minutes){
+  state.emaTf=minutes;
+  localStorage.setItem('morgan_ema_tf', String(minutes));
+  renderTfSelector();
+  if(currentAsset) drawPriceChart(assets[currentAsset]);
+}
+function renderTfSelector(){
+  const row=$('tfSelectorRow'); if(!row) return;
+  const show = mode().strategy==='emaTrend';
+  row.hidden = !show;
+  if(!show) return;
+  row.innerHTML='';
+  EMA_TF_OPTIONS.forEach(opt=>{
+    const b=document.createElement('button');
+    b.className='btn-ghost'; b.style.padding='4px 10px'; b.style.fontSize='12px';
+    if(state.emaTf===opt.m){ b.style.borderColor='#22c55e'; b.style.color='#22c55e'; }
+    b.textContent=opt.l;
+    b.onclick=()=>setEmaTf(opt.m);
+    row.appendChild(b);
+  });
+}
 function emaLine(values, period){
   // Full EMA series (not just the latest value) so it can be drawn as a line.
   if(values.length < period) return values.map(()=>null);
@@ -1979,10 +2090,13 @@ function drawPriceChart(a){
   ctx.setTransform(ratio,0,0,ratio,0,0);
   ctx.clearRect(0,0,cssW,cssH);
 
-  // Same real candles the signal engine itself reads: completed M1 bars plus the
-  // currently-forming live bar synthesized from the latest ticks. Keep a bigger
-  // buffer than we display so zoom/pan has real history to scroll into.
-  const all = (typeof liveBarsFor==='function' ? liveBarsFor(a,1) : (a.bars1||[])).slice(-500);
+  // Same real candles the signal engine itself reads: completed bars on the
+  // active timeframe plus the currently-forming live bar. EMA Trend mode uses
+  // whatever timeframe is picked in the selector (state.emaTf); every other
+  // mode stays on M1 as before.
+  const m0 = mode();
+  const chartTf = m0.strategy==='emaTrend' ? (state.emaTf||5) : 1;
+  const all = (typeof liveBarsFor==='function' ? liveBarsFor(a,chartTf) : (a.bars1||[])).slice(-500);
   if(all.length < 2){
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.font = '12px sans-serif';
@@ -2018,13 +2132,11 @@ function drawPriceChart(a){
     ctx.fillRect(x-bodyW/2, Math.min(yO,yC), bodyW, Math.max(1,Math.abs(yC-yO)));
   });
 
-  // EMA9/21 overlay — the same trend read used by the signal engine, drawn over
-  // the visible window (computed on the full buffer so the lines don't warp at
-  // the left edge of a zoomed-in view).
+  // Overlay: EMA5/13/89 (green/white/yellow, thicker) for the EMA Trend strategy,
+  // EMA9/21 (the scoring engine's own trend read) for every other mode.
   const closes = all.map(b=>b.c);
-  const e9all = emaLine(closes,9), e21all = emaLine(closes,21);
-  const drawLine = (series, color) => {
-    ctx.strokeStyle = color; ctx.lineWidth = 1.4; ctx.beginPath();
+  const drawLine = (series, color, width) => {
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
     let started=false;
     for(let i=start;i<end;i++){
       const v = series[i]; if(v==null) continue;
@@ -2033,8 +2145,15 @@ function drawPriceChart(a){
     }
     if(started) ctx.stroke();
   };
-  drawLine(e9all, 'rgba(96,165,250,0.9)');
-  drawLine(e21all, 'rgba(251,191,36,0.9)');
+  const isEmaTrend = m0.strategy==='emaTrend';
+  if(isEmaTrend){
+    drawLine(emaLine(closes,5),  '#22c55e', 2.2); // EMA5 — green
+    drawLine(emaLine(closes,13), '#f8fafc', 2.2); // EMA13 — white
+    drawLine(emaLine(closes,89), '#facc15', 2.6); // EMA89 — yellow, thickest (the trend filter)
+  } else {
+    drawLine(emaLine(closes,9),  'rgba(96,165,250,0.9)', 1.4);
+    drawLine(emaLine(closes,21), 'rgba(251,191,36,0.9)', 1.4);
+  }
 
   // Open position: entry / SL / TP lines.
   if(a.position){
@@ -2072,12 +2191,17 @@ function drawPriceChart(a){
   const r14 = rsiSeries(closes,14), r6 = rsiSeries(closes,6);
   const legend = $('chartLegend');
   if(legend){
-    legend.innerHTML =
-      '<span style="color:#60a5fa;">— EMA9</span> &nbsp; '+
-      '<span style="color:#fbbf24;">— EMA21</span> &nbsp; '+
-      'RSI14 '+(r14==null?'—':r14.toFixed(1))+' · RSI6 '+(r6==null?'—':r6.toFixed(1))+
-      ' · showing '+bars.length+' of '+all.length+' candles';
+    legend.innerHTML = isEmaTrend
+      ? '<span style="color:#22c55e;">— EMA5</span> &nbsp; '+
+        '<span style="color:#f8fafc;">— EMA13</span> &nbsp; '+
+        '<span style="color:#facc15;">— EMA89</span> &nbsp; '+
+        'showing '+bars.length+' of '+all.length+' candles ('+chartTf+'m)'
+      : '<span style="color:#60a5fa;">— EMA9</span> &nbsp; '+
+        '<span style="color:#fbbf24;">— EMA21</span> &nbsp; '+
+        'RSI14 '+(r14==null?'—':r14.toFixed(1))+' · RSI6 '+(r6==null?'—':r6.toFixed(1))+
+        ' · showing '+bars.length+' of '+all.length+' candles';
   }
+  const tfLabelEl=$('chartTfLabel'); if(tfLabelEl) tfLabelEl.textContent = (chartTf===60?'H1':chartTf+'m')+' · live';
 }
 function initChartInteraction(){
   const cv = $('priceChart'); if(!cv || cv._interactionBound) return;
@@ -2137,7 +2261,8 @@ function initChartInteraction(){
 /* ---------------- Trading ---------------- */
 
 function updateRiskSetting(key, val){
-  state.risk[key] = parseFloat(val) || state.risk[key];
+  const n = parseFloat(val);
+  state.risk[key] = isNaN(n) ? state.risk[key] : n; // fixed: old `n || old` treated 0 (e.g. breakeven off) as invalid
 }
 
 function toggleSwitch(which){
@@ -2220,9 +2345,25 @@ function ctExecuteTrade(a, side){
   if(!a.lastPrice){ log('No live price yet for '+a.label+'.'); return; }
   if(a.position){ log('Already in a position on '+a.label+' — close it first.'); return; }
 
-  const plan=modePlan(a);
-  const slDist = state.modeProtection ? (plan.sl||a.defSL) : (parseFloat($('inSL').value)||a.defSL);
-  const tpDist = state.modeProtection ? (plan.tp||a.defTP) : (parseFloat($('inTP').value)||a.defTP);
+  const m=mode();
+  let slDist, tpDist, emaRideMode=false;
+  if(m.strategy==='emaTrend'){
+    // Per the strategy spec: stop goes just beyond EMA89 itself, not a manual
+    // distance. "Ride" holds with no fixed target (exits on a trend flip);
+    // "Pullback" takes a fixed R multiple of that same stop distance.
+    const ema89 = a.lastSignal && a.lastSignal.ema89;
+    if(!ema89){ log('EMA89 not ready yet for '+a.label+' — wait for warm-up to finish.'); return; }
+    const digits = a.full && a.full.digits != null ? a.full.digits : 5;
+    const buffer = Math.max(a.lastPrice*0.0004, Math.pow(10,-digits)*5); // small pad beyond EMA89, scaled to the symbol
+    slDist = side==='BUY' ? Math.max(0.00001, a.lastPrice-(ema89-buffer)) : Math.max(0.00001, (ema89+buffer)-a.lastPrice);
+    emaRideMode = m.emaSub==='ride';
+    tpDist = emaRideMode ? 0 : slDist*(m.rMultiple||1.5);
+    $('inSL').value = slDist.toFixed(digits);
+    $('inTP').value = emaRideMode ? '' : tpDist.toFixed(digits);
+  } else {
+    slDist = parseFloat($('inSL').value)||a.defSL;
+    tpDist = parseFloat($('inTP').value)||a.defTP;
+  }
   // relativeStopLoss/relativeTakeProfit must be scaled to THIS symbol's own decimal
   // precision (cTrader's own `digits` field for it), not a hardcoded 5-digit forex
   // assumption — that assumption is wrong for metals/indices/crypto CFDs (e.g.
@@ -2230,7 +2371,7 @@ function ctExecuteTrade(a, side){
   const digits = a.full && a.full.digits != null ? a.full.digits : 5;
   const priceScale = Math.pow(10, digits);
   const relSL = Math.round(slDist*priceScale);
-  const relTP = Math.round(tpDist*priceScale);
+  const relTP = emaRideMode ? 0 : Math.round(tpDist*priceScale);
   const minVol = a.full ? a.full.minVolume : 1000;
   const step = a.full ? (a.full.stepVolume||minVol) : minVol;
   // lotSize is the broker's own contract size for THIS symbol (units per lot, in cents,
@@ -2251,13 +2392,15 @@ function ctExecuteTrade(a, side){
     // PAPER SIMULATION — no order sent
     a.lastTradeAt = Date.now();
     const entryPrice=a.lastPrice;
-    const takeProfitPrice = side==='BUY' ? entryPrice+tpDist : entryPrice-tpDist;
+    // Ride mode has no fixed target (tpDist=0) — null, not entryPrice, or the
+    // paper exit check below would fire an instant false "target reached".
+    const takeProfitPrice = emaRideMode ? null : (side==='BUY' ? entryPrice+tpDist : entryPrice-tpDist);
     const stopLossPrice = side==='BUY' ? entryPrice-slDist : entryPrice+slDist;
-    a.stackTarget = Math.max(1, Math.min(5, parseInt($('inStackTarget') ? $('inStackTarget').value : 1, 10) || 1));
+    a.stackTarget = m.strategy==='emaTrend' ? 1 : Math.max(1, Math.min(5, parseInt($('inStackTarget') ? $('inStackTarget').value : 1, 10) || 1));
     a.position = {side, entryPrice, volume, paper:true, floatingPnL:0, openedAt:Date.now(), mode:state.tradeMode,
-      takeProfitPrice, stopLossPrice, riskDollars: prospectiveRisk, beMoved:false,
+      takeProfitPrice, stopLossPrice, riskDollars: prospectiveRisk, beMoved:false, emaRide:emaRideMode,
       legs:[{entryPrice, volume, openedAt:Date.now(), stopLossPrice, takeProfitPrice, initialRisk:slDist, rMultiple: slDist>0?(tpDist/slDist):1.5}]};
-    log('[PAPER] '+side+' '+a.label+' '+lotsUsed.toFixed(2)+' lots @ '+a.lastPrice.toFixed(5)+' (risking ~$'+prospectiveRisk.toFixed(2)+')'+(a.stackTarget>1?' — stacking up to '+a.stackTarget+' legs':''));
+    log('[PAPER] '+side+' '+a.label+' '+lotsUsed.toFixed(2)+' lots @ '+a.lastPrice.toFixed(5)+' (risking ~$'+prospectiveRisk.toFixed(2)+')'+(a.stackTarget>1?' — stacking up to '+a.stackTarget+' legs':'')+(emaRideMode?' — riding the trend, no fixed target':''));
     renderBotView(a);
     return;
   }
@@ -2342,9 +2485,11 @@ function trackPosition(a, posPayload){
 function checkBreakevenCtrader(a){
   const p=a.position;
   if(!p || p.beMoved || !p.stopLossPrice) return;
+  const trigR = state.risk.breakevenTriggerR;
+  if(!trigR || trigR<=0) return; // 0 = breakeven off
   const risk=Math.abs(p.entryPrice-p.stopLossPrice);
   if(risk<=0) return;
-  const moved = p.side==='BUY' ? (a.lastPrice-p.entryPrice>=risk*0.8) : (p.entryPrice-a.lastPrice>=risk*0.8);
+  const moved = p.side==='BUY' ? (a.lastPrice-p.entryPrice>=risk*trigR) : (p.entryPrice-a.lastPrice>=risk*trigR);
   if(!moved) return;
   p.beMoved=true;
   p.stopLossPrice=p.entryPrice;
@@ -2362,6 +2507,29 @@ function checkBreakevenCtrader(a){
 // cTrader paper positions had no client-side stop/target check at all — only the
 // 8-minute max-hold timer or a manual Close could ever end one. Real orders get
 // their SL/TP from the broker itself; paper trades need this done locally.
+function checkEmaTrendExit(a){
+  const p=a.position;
+  if(!p || !p.emaRide) return; // only the "ride" sub-strategy exits this way — pullback mode uses its fixed target/stop above
+  const sig=a.lastSignal;
+  if(!sig || !sig.checks || !sig.checks.length) return;
+  const trendCheck=sig.checks[0]; // 'Trend filter (EMA5/13 vs EMA89)' — its tag is BUY/SELL/WAIT
+  if(!trendCheck) return;
+  const trendNow=trendCheck.tag;
+  // Clean break = both EMA5 and EMA13 are now on the OTHER side of EMA89 from
+  // the position, or trend has gone flat (WAIT) — either way the trend this
+  // position was riding is gone.
+  const brokenAgainst = trendNow!==p.side;
+  if(brokenAgainst){
+    if(p.paper) closePaperPositionCtrader(a,'trend-flip');
+    else closeCurrentPositionSilently(a,'Trend flip (EMA5/EMA13 broke back through EMA89) — closing ride position on '+a.label+'.');
+  }
+}
+function closeCurrentPositionSilently(a, msg){
+  // Real (non-paper) position, ride mode reversed: no client-side exit order API
+  // is wired for real cTrader positions in this build, so we tell you clearly
+  // instead of silently doing nothing — close it manually from the position card.
+  log(msg+' Please close it manually — automatic real-order exit for ride-mode isn\'t wired up yet.');
+}
 function checkPaperExitCtrader(a){
   const p=a.position;
   if(!p || !p.paper) return;
@@ -2379,10 +2547,10 @@ function checkPaperExitCtrader(a){
   }
   if(p.side==='BUY'){
     if(a.lastPrice<=p.stopLossPrice){ closePaperPositionCtrader(a,'stop'); return; }
-    if(a.lastPrice>=p.takeProfitPrice){ closePaperPositionCtrader(a,'target'); return; }
+    if(p.takeProfitPrice && a.lastPrice>=p.takeProfitPrice){ closePaperPositionCtrader(a,'target'); return; }
   } else {
     if(a.lastPrice>=p.stopLossPrice){ closePaperPositionCtrader(a,'stop'); return; }
-    if(a.lastPrice<=p.takeProfitPrice){ closePaperPositionCtrader(a,'target'); return; }
+    if(p.takeProfitPrice && a.lastPrice<=p.takeProfitPrice){ closePaperPositionCtrader(a,'target'); return; }
   }
 }
 // Adds the next equal-size leg once the most recently opened leg is +0.5R in
@@ -2422,6 +2590,7 @@ function closePaperPositionCtrader(a, reason){
   const legCount=p.legs?p.legs.length:1;
   const why = reason==='stack-stop'?'stack backstop hit'
     : reason==='stack-lock'?'stack profit-lock (back to leg 1 entry)'
+    : reason==='trend-flip'?'trend flip — EMA5/EMA13 broke back through EMA89'
     : reason==='stop'?'stop reached':'target reached';
   log('['+label+'] '+a.label+' '+p.side+' '+(legCount>1?legCount+'-leg stack closed — ':'')+why+'.');
   pushTradeHistory('cTrader', a.label, p.side, p.entryPrice, a.lastPrice, pnl, true);
@@ -2515,7 +2684,7 @@ function backtestBarsFor(a, tf){ return tfBars(a,tf)||[]; }
 function barsThrough(bars, t){ return bars.filter(b=>b.t<=t); }
 function makeBacktestSnapshot(a, t){
   const x=Object.assign({},a);
-  x.bars1=barsThrough(a.bars1,t); x.bars5=barsThrough(a.bars5,t);
+  x.bars1=barsThrough(a.bars1,t); x.bars5=barsThrough(a.bars5,t); x.bars15=barsThrough(a.bars15,t); x.bars30=barsThrough(a.bars30,t); x.bars60=barsThrough(a.bars60,t);
   x.lastPrice=x.bars1.length?x.bars1[x.bars1.length-1].c:null;
   x.lastBid=x.lastPrice; x.lastAsk=x.lastPrice;
   x.signalStreak=0; x.lastStableDirection='WAIT'; x.lastSignal=null; x.position=null;
@@ -2712,7 +2881,6 @@ runBacktestForMode=function(a,key,bars){
 
 renderModeGrid();
 renderPaperStats();
-const modeSwitch=$('swModeProtection'); if(modeSwitch) modeSwitch.classList.toggle('on',state.modeProtection);
 if("serviceWorker" in navigator){
   window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(()=>{}));
 }
