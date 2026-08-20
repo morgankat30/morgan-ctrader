@@ -374,6 +374,10 @@ a{color:var(--cyan);}
           <div id="tpWrap"><label>TP distance (price units)</label><input id="inTP" type="number" step="0.0001" value="0.004"></div>
           <div><label>Min score to trade</label><input id="inMinScore" type="number" min="0" max="100" value="75"></div>
         </div>
+        <div class="row">
+          <div id="stackWrap"><label>Positions to stack (cTrader paper, 1 = off)</label><input id="inStackTarget" type="number" min="1" max="5" step="1" value="1"></div>
+        </div>
+        <p class="small" style="margin-top:4px;">Adds equal-size same-direction legs as each one reaches +0.5R, up to this count. Whole stack closes together — either at leg 1's original stop, or once price gives back to leg 1's entry. Equal sizing means combined risk grows with each leg added; this does not replace your daily loss/portfolio risk caps below, which still apply to every add.</p>
         <p class="small" id="riskSizingHint" style="margin-top:8px;"></p>
         <p class="small" id="bnAmountHint" hidden></p>
         <p class="small" id="bnNoSlTpNote" hidden>Binance BUY/SELL here are plain market orders — no automatic stop loss/take profit yet. Close manually or via the signal reversing.</p>
@@ -1514,6 +1518,7 @@ function onSpot(p){
     try{
       updateFloatingPnL(a);
       checkBreakevenCtrader(a);
+      maybeAddStackLeg(a);
       checkPaperExitCtrader(a);
       checkModeTimeExit(a);
     }catch(e){
@@ -2245,11 +2250,14 @@ function ctExecuteTrade(a, side){
   if(!canSendRealOrders()){
     // PAPER SIMULATION — no order sent
     a.lastTradeAt = Date.now();
-    a.position = {side, entryPrice:a.lastPrice, volume, paper:true, floatingPnL:0, openedAt:Date.now(), mode:state.tradeMode,
-      takeProfitPrice: side==='BUY' ? a.lastPrice+tpDist : a.lastPrice-tpDist,
-      stopLossPrice: side==='BUY' ? a.lastPrice-slDist : a.lastPrice+slDist,
-      riskDollars: prospectiveRisk, beMoved:false};
-    log('[PAPER] '+side+' '+a.label+' '+lotsUsed.toFixed(2)+' lots @ '+a.lastPrice.toFixed(5)+' (risking ~$'+prospectiveRisk.toFixed(2)+')');
+    const entryPrice=a.lastPrice;
+    const takeProfitPrice = side==='BUY' ? entryPrice+tpDist : entryPrice-tpDist;
+    const stopLossPrice = side==='BUY' ? entryPrice-slDist : entryPrice+slDist;
+    a.stackTarget = Math.max(1, Math.min(5, parseInt($('inStackTarget') ? $('inStackTarget').value : 1, 10) || 1));
+    a.position = {side, entryPrice, volume, paper:true, floatingPnL:0, openedAt:Date.now(), mode:state.tradeMode,
+      takeProfitPrice, stopLossPrice, riskDollars: prospectiveRisk, beMoved:false,
+      legs:[{entryPrice, volume, openedAt:Date.now(), stopLossPrice, takeProfitPrice, initialRisk:slDist, rMultiple: slDist>0?(tpDist/slDist):1.5}]};
+    log('[PAPER] '+side+' '+a.label+' '+lotsUsed.toFixed(2)+' lots @ '+a.lastPrice.toFixed(5)+' (risking ~$'+prospectiveRisk.toFixed(2)+')'+(a.stackTarget>1?' — stacking up to '+a.stackTarget+' legs':''));
     renderBotView(a);
     return;
   }
@@ -2357,6 +2365,18 @@ function checkBreakevenCtrader(a){
 function checkPaperExitCtrader(a){
   const p=a.position;
   if(!p || !p.paper) return;
+  if(p.legs && p.legs.length>1){
+    // Stacking: whole stack lives or dies together. Hard backstop is leg 1's own
+    // original stop (never moves); the profit-lock is price giving back to leg 1's
+    // entry — by definition that can't trip until a 2nd leg was added, since a 2nd
+    // leg only gets added after leg 1 was already +0.5R away from its own entry.
+    const anchor=p.legs[0];
+    const hitBackstop = p.side==='BUY' ? a.lastPrice<=anchor.stopLossPrice : a.lastPrice>=anchor.stopLossPrice;
+    if(hitBackstop){ closePaperPositionCtrader(a,'stack-stop'); return; }
+    const backToEntry = p.side==='BUY' ? a.lastPrice<=anchor.entryPrice : a.lastPrice>=anchor.entryPrice;
+    if(backToEntry){ closePaperPositionCtrader(a,'stack-lock'); return; }
+    return;
+  }
   if(p.side==='BUY'){
     if(a.lastPrice<=p.stopLossPrice){ closePaperPositionCtrader(a,'stop'); return; }
     if(a.lastPrice>=p.takeProfitPrice){ closePaperPositionCtrader(a,'target'); return; }
@@ -2365,11 +2385,45 @@ function checkPaperExitCtrader(a){
     if(a.lastPrice<=p.takeProfitPrice){ closePaperPositionCtrader(a,'target'); return; }
   }
 }
+// Adds the next equal-size leg once the most recently opened leg is +0.5R in
+// floating profit, up to a.stackTarget legs. Every add still passes through
+// riskGate() — the daily-loss/portfolio-risk caps apply to each leg, same as
+// a fresh single trade, regardless of stack size chosen.
+function maybeAddStackLeg(a){
+  const p=a.position;
+  if(!p || !p.paper || !p.legs || !p.legs.length) return;
+  const target=a.stackTarget||1;
+  if(p.legs.length>=target) return;
+  const lastLeg=p.legs[p.legs.length-1];
+  const risk=lastLeg.initialRisk;
+  if(!risk || risk<=0) return;
+  const dir=p.side==='BUY'?1:-1;
+  const profit=(a.lastPrice-lastLeg.entryPrice)*dir;
+  if(profit < risk*0.5) return;
+  const prospectiveRisk = risk*(lastLeg.volume/100);
+  if(!riskGate(a, prospectiveRisk)){ log('Stack add blocked by risk limits for '+a.label+'.'); return; }
+  const entryPrice=a.lastPrice;
+  const newLeg={
+    entryPrice, volume:lastLeg.volume, openedAt:Date.now(),
+    stopLossPrice: p.side==='BUY' ? entryPrice-risk : entryPrice+risk,
+    takeProfitPrice: p.side==='BUY' ? entryPrice+risk*lastLeg.rMultiple : entryPrice-risk*lastLeg.rMultiple,
+    initialRisk:risk, rMultiple:lastLeg.rMultiple
+  };
+  p.legs.push(newLeg);
+  p.volume=(p.volume||0)+newLeg.volume;
+  p.riskDollars=(p.riskDollars||0)+prospectiveRisk; // keep portfolio-risk-cap tracking accurate across the whole stack
+  log('[PAPER] Stack leg '+p.legs.length+'/'+target+' added for '+a.label+' @ '+entryPrice.toFixed(5)+' (prior leg reached +0.5R).');
+  if(currentAsset===a.key) renderBotView(a);
+}
 function closePaperPositionCtrader(a, reason){
   const p=a.position;
   const pnl=p.floatingPnL||0;
   const label=(TRADE_MODES[p.mode]||mode()).label;
-  log('['+label+'] '+a.label+' '+p.side+' '+(reason==='stop'?'stop':'target')+' reached.');
+  const legCount=p.legs?p.legs.length:1;
+  const why = reason==='stack-stop'?'stack backstop hit'
+    : reason==='stack-lock'?'stack profit-lock (back to leg 1 entry)'
+    : reason==='stop'?'stop reached':'target reached';
+  log('['+label+'] '+a.label+' '+p.side+' '+(legCount>1?legCount+'-leg stack closed — ':'')+why+'.');
   pushTradeHistory('cTrader', a.label, p.side, p.entryPrice, a.lastPrice, pnl, true);
   recordResult(pnl, true, p.mode);
   a.position=null;
@@ -2391,6 +2445,14 @@ function checkModeTimeExit(a){
 function updateFloatingPnL(a){
   if(!a.position) return;
   const dir=a.position.side==='BUY'?1:-1;
+  if(state.broker!=='binance' && a.position.legs && a.position.legs.length){
+    // Stacked cTrader paper legs — sum each leg's own P&L off its own entry price.
+    let total=0;
+    a.position.legs.forEach(leg=>{ total += (a.lastPrice-leg.entryPrice)*dir*(leg.volume/100); });
+    a.position.floatingPnL=total;
+    refreshEquity();
+    return;
+  }
   const priceDiff=(a.lastPrice-a.position.entryPrice)*dir;
   if(state.broker==='binance'){
     // Binance Spot quantity is base-asset units, so quote P&L is price change × quantity.
