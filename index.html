@@ -104,6 +104,8 @@ a{color:var(--cyan);}
     <div id="envBadge" class="envBadge off">NOT CONNECTED</div>
   </header>
 
+  <div id="approvalQueue" style="display:none;"></div>
+
   <main>
 
     <!-- BROKER SELECT -->
@@ -219,6 +221,11 @@ a{color:var(--cyan);}
         <p class="small" id="stopStatus" style="margin-top:6px;"></p>
       </div>
 
+      <div class="panel" id="allPositionsPanel" hidden>
+        <h2>Open positions (all pairs)</h2>
+        <div id="allPositionsBox"></div>
+      </div>
+
       <div class="panel">
         <h2>Execution mode</h2>
         <div class="toggle">
@@ -232,6 +239,10 @@ a{color:var(--cyan);}
         <div class="toggle">
           <div><b>Auto-execute on signal</b><div class="small">If off, you tap BUY/SELL yourself after reviewing the signal.</div></div>
           <div class="switch" id="swAuto" onclick="toggleSwitch('auto')"></div>
+        </div>
+        <div class="toggle">
+          <div><b>Ask before firing (any pair)</b><div class="small">With auto-execute on, every ready signal on every pair still waits for you to tap Approve — shown right at the top of the app, on whichever screen you're on. Unapproved signals expire after 90s.</div></div>
+          <div class="switch" id="swRequireApproval" onclick="toggleRequireApproval()"></div>
         </div>
       </div>
 
@@ -285,8 +296,12 @@ a{color:var(--cyan);}
         <p class="small">Execution itself is already immediate — market orders on live ticks, no artificial delay.</p>
         <p class="small"><b>Sizing:</b> lot size auto-scales 0.01 → 0.05 as the account grows (+0.01 every 25% growth from this session's starting balance), or set it manually per trade on each bot's screen.</p>
         <div class="toggle" style="margin-top:10px;">
-          <div><b>Profit-lock trailing stop</b><div class="small">Once a trade is in profit, the stop continuously trails to guarantee ~90% of the current profit (minus a small $1.50 cushion so it can still breathe) — never gives back what it's already locked in.</div></div>
+          <div><b>Profit-lock trailing stop</b><div class="small">Once profit clears the arm threshold below, the stop trails to guarantee ~90% of current profit (minus a small $1.50 cushion). Never touches the stop before that threshold — real room to breathe, fixed from the $0.00-close bug found in testing.</div></div>
           <div class="switch on" id="swProfitLock" onclick="toggleProfitLock()"></div>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <div><label>Arm threshold ($ profit before it starts protecting)</label><input id="inProfitLockArm" type="number" step="0.5" min="0" value="2" onchange="updateRiskSetting('profitLockArmDollars', this.value)"></div>
+          <div></div>
         </div>
         <div class="toggle" style="margin-top:10px;">
           <div><b>Manual news blackout</b><div class="small">No live economic calendar is wired in — this is a UTC time window you set yourself. No new entries fire inside it; open positions are untouched.</div></div>
@@ -361,7 +376,11 @@ a{color:var(--cyan);}
 
       <div class="panel">
         <h2>Trade size &amp; protection</h2>
-        <p class="small">SL/TP below are plain price-distance numbers you set — nothing is auto-calculated or overwritten while you're viewing this pair.</p>
+        <p class="small">SL/TP below are plain dollar amounts you set — nothing is auto-calculated or overwritten while you're viewing this pair.</p>
+        <div class="toggle" style="margin-bottom:10px;">
+          <div><b>Lock these settings for every pair</b><div class="small">When on: lot size, SL, TP, and min score stay exactly what you set here — the same for every pair, and switching pairs or going back to the main page never resets them. Turn off to let lot size auto-scale with balance again.</div></div>
+          <div class="switch" id="swSettingsLock" onclick="toggleSettingsLock()"></div>
+        </div>
         <div class="row">
           <div id="volWrap"><label id="volLabel">Trade amount (USDT)</label><input id="inVolMult" type="number" min="1" value="1"></div>
           <div id="lotWrap" hidden><label>Lot size</label><input id="inLotSize" type="number" step="0.01" min="0.01" value="0.01"></div>
@@ -381,6 +400,10 @@ a{color:var(--cyan);}
           </div>
         </div>
         <p class="small" style="margin-top:4px;">Adds equal-size same-direction legs as each one reaches +0.5R, up to this count. Whole stack closes together — either at leg 1's original stop, or once price gives back to leg 1's entry. Equal sizing means combined risk grows with each leg added; this does not replace your daily loss/portfolio risk caps below, which still apply to every add.</p>
+        <div class="row" id="straddleWrap" hidden style="margin-top:10px;">
+          <div><label>Straddle distance ($ away from price)</label><input id="inStraddleDist" type="number" step="0.5" min="0.5" value="10"></div>
+          <div><label>Re-arm if untouched for (sec)</label><input id="inStraddleRearm" type="number" step="5" min="10" value="90"></div>
+        </div>
         <p class="small" id="riskSizingHint" style="margin-top:8px;"></p>
         <p class="small" id="bnAmountHint" hidden></p>
         <p class="small" id="bnNoSlTpNote" hidden>Binance BUY/SELL here are plain market orders — no automatic stop loss/take profit yet. Close manually or via the signal reversing.</p>
@@ -415,6 +438,7 @@ const PT = {
   APP_AUTH_REQ:2100, APP_AUTH_RES:2101,
   ACC_AUTH_REQ:2102, ACC_AUTH_RES:2103,
   NEW_ORDER_REQ:2106,
+  CANCEL_ORDER_REQ:2109,
   CLOSE_POSITION_REQ:2111,
   AMEND_POSITION_SLTP_REQ:2110,
   SYMBOLS_LIST_REQ:2114, SYMBOLS_LIST_RES:2115,
@@ -458,7 +482,12 @@ const TRADE_MODES = {
   // EMA5+EMA13 break back through EMA89. "Pullback" takes a fixed R:R target on
   // every pullback and re-arms for the next one, all inside the same trend.
   emaRide:{label:'EMA Trend — Ride', desc:'EMA5/13/89: one entry per trend, holds until EMA5+EMA13 break cleanly back through EMA89.', strategy:'emaTrend', emaSub:'ride', minScore:0, cooldownMs:5*1000, maxHoldMs:5*24*60*60*1000, liveEntry:true},
-  emaPullback:{label:'EMA Trend — Pullback', desc:'EMA5/13/89: same entries, but takes a 1:1.5 target on every pullback and re-arms while the trend continues.', strategy:'emaTrend', emaSub:'pullback', rMultiple:1.5, minScore:0, cooldownMs:5*1000, maxHoldMs:5*24*60*60*1000, liveEntry:true}
+  emaPullback:{label:'EMA Trend — Pullback', desc:'EMA5/13/89: same entries, but takes a 1:1.5 target on every pullback and re-arms while the trend continues.', strategy:'emaTrend', emaSub:'pullback', rMultiple:1.5, minScore:0, cooldownMs:5*1000, maxHoldMs:5*24*60*60*1000, liveEntry:true},
+  // Pending Buy Stop + Sell Stop bracketing price, no trend/momentum/spread
+  // filter — whichever side price reaches first fires, the other side cancels.
+  // Added purely so you can A/B it against our filtered styles yourself; it
+  // does not replace anything.
+  straddle:{label:'Pending Straddle', desc:'Buy Stop above + Sell Stop below price, no confluence filter — first one price touches fires, the other cancels. Re-arms after every close.', strategy:'straddle', minScore:0, cooldownMs:2*1000, maxHoldMs:8*60*1000, liveEntry:true}
 };
 function mode(){ return TRADE_MODES[state.tradeMode] || TRADE_MODES.scalping; }
 function tfBars(a, tf){
@@ -501,6 +530,8 @@ let state = {
   tradeMode:'scalping',
   modeProtection:false,
   stackEnabled:false, // off by default — the switch next to "Positions to stack" must be explicitly turned on
+  settingsLocked:false, // when true: lot size/SL/TP/min-score stay exactly as set, same for every pair, never auto-filled on switch
+  requireApproval:false, // when true: a ready signal waits for a manual Approve tap instead of firing immediately
   startBalance:null, // captured once from the first balance seen this session, see autoLotSize()
   emaTf:5, // active timeframe (minutes) for the EMA 5/13/89 strategy: 1,5,15,30,60
   clientId:'', clientSecret:'', accessToken:'', refreshToken:'',
@@ -514,7 +545,7 @@ let state = {
     // as fixed internal backstops — maxSpreadPct in particular is load-bearing inside
     // the signal engine's own "Volatility/spread" confluence check, not just a gate.
     dailyLossLimitPct:5, portfolioRiskCapPct:20,
-    profitLockEnabled:true, maxSpreadPct:0.08,
+    profitLockEnabled:true, profitLockArmDollars:2, maxSpreadPct:0.08,
     newsBlackoutEnabled:false, newsStartUTC:null, newsEndUTC:null, // manual window only — no live calendar wired in
     dailyLossUsed:0, dailyDateKey:'',
     maxTradesPerDay:9999, dailyTradeCount:0,
@@ -631,6 +662,7 @@ let pendingTrendbarRequests = {}; // clientMsgId -> symbolId
 let symbolsByNorm = {};   // normalized name -> {symbolId, symbolName}
 let assets = {};          // key -> asset state object
 let currentAsset = null;
+const pendingApprovals = {}; // key -> {side, armedAt}
 let bnSockets = {};       // key -> WebSocket for Binance market stream
 
 const $ = id => document.getElementById(id);
@@ -1362,10 +1394,25 @@ function updateBalanceDisplay(){
 
 function refreshEquity(){
   let unrealized = 0;
-  Object.values(assets).forEach(a => { if(a.position) unrealized += a.position.floatingPnL || 0; });
+  const open=[];
+  Object.values(assets).forEach(a => { if(a.position){ unrealized += a.position.floatingPnL || 0; open.push(a); } });
   const base = (state.paper ? state.paperBalance : state.balance) || 0;
   state.equity = base + unrealized;
   $('stEquity').textContent = '$' + state.equity.toFixed(2);
+  renderAllPositions(open);
+}
+function renderAllPositions(open){
+  const panel=$('allPositionsPanel'), box=$('allPositionsBox');
+  if(!panel || !box) return;
+  panel.hidden = open.length===0;
+  if(open.length===0) return;
+  box.innerHTML = open.map(a=>{
+    const p=a.position;
+    const legTag = p.legs && p.legs.length>1 ? ' ('+p.legs.length+' legs)' : '';
+    return '<div class="small" style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.08); cursor:pointer;" onclick="openBot(\''+a.key+'\')">'+
+      '<span>'+(p.side==='BUY'?'<span class="pos">BUY</span>':'<span class="neg">SELL</span>')+' '+a.label+legTag+'</span>'+
+      '<span class="'+((p.floatingPnL||0)>=0?'pos':'neg')+'">'+((p.floatingPnL||0)>=0?'+':'')+(p.floatingPnL||0).toFixed(2)+'</span></div>';
+  }).join('');
 }
 
 function normName(s){ return String(s).toUpperCase().replace(/[^A-Z]/g,''); }
@@ -1547,6 +1594,7 @@ function onSpot(p){
   // stale and maybeAutoTrade() below had nothing fresh to act on. Now computed
   // for every asset on every tick regardless of which screen is open.
   a.lastSignal = computeActiveSignal(a);
+  expireStaleApprovals();
   if(a.position){
     try{
       updateFloatingPnL(a);
@@ -1878,7 +1926,31 @@ function computeEmaTrendSignal(a){
 // per-tick handler for EVERY asset (not just the one on screen) so background
 // pairs actually get fresh signals — see the fix in onSpot() below.
 function computeActiveSignal(a){
-  return mode().strategy==='emaTrend' ? computeEmaTrendSignal(a) : computeSignal(a);
+  const strat=mode().strategy;
+  if(strat==='emaTrend') return computeEmaTrendSignal(a);
+  if(strat==='straddle') return computeStraddleSignal(a);
+  return computeSignal(a);
+}
+// Purely informational — the straddle style doesn't use a confluence score at
+// all (that's the point of it), so this just reports pending-order state for
+// the UI. Actual placement/fill/re-arm logic lives in manageStraddle().
+function computeStraddleSignal(a){
+  const p=a.pendingStraddle;
+  const checks=[];
+  if(!a.lastPrice){
+    checks.push({label:'Straddle',tag:'WAIT',detail:'waiting for live price'});
+  } else if(a.position){
+    checks.push({label:'Straddle',tag:a.position.side,detail:'filled — in position, no pending orders active'});
+  } else if(p){
+    const digits=a.full && a.full.digits!=null ? a.full.digits : 5;
+    const secsLeft=Math.max(0, Math.round((p.armedAt+((parseFloat($('inStraddleRearm')?$('inStraddleRearm').value:90)||90)*1000)-Date.now())/1000));
+    checks.push({label:'Buy Stop',tag:'PENDING',detail:p.buyPrice.toFixed(digits)});
+    checks.push({label:'Sell Stop',tag:'PENDING',detail:p.sellPrice.toFixed(digits)});
+    checks.push({label:'Re-arms in',tag:'WAIT',detail:secsLeft+'s if untouched'});
+  } else {
+    checks.push({label:'Straddle',tag:'WAIT',detail:'arming...'});
+  }
+  return {direction:'WAIT', score:0, checks, fastPath:false, tradeReady:false};
 }
 
 // Turns a WAIT signal into a live, specific status line — what it's actually
@@ -1902,7 +1974,7 @@ function renderModeGrid(){
   Object.entries(TRADE_MODES).forEach(([key,m])=>{
     const d=document.createElement('div'); d.className='modecard'+(state.tradeMode===key?' active':'');
     d.onclick=()=>setTradeMode(key);
-    const badge = m.strategy==='emaTrend' ? 'EMA 5/13/89' : (m.minScore+'+ SCORE');
+    const badge = m.strategy==='emaTrend' ? 'EMA 5/13/89' : m.strategy==='straddle' ? 'NO FILTER' : (m.minScore+'+ SCORE');
     d.innerHTML='<b>'+m.label+'</b><small>'+m.desc+'</small><span class="modebadge">'+badge+'</span>';
     grid.appendChild(d);
   });
@@ -1911,8 +1983,11 @@ function renderModeGrid(){
   if(status){
     status.textContent = m.strategy==='emaTrend'
       ? 'ACTIVE: '+m.label+' · Timeframe '+(state.emaTf||5)+'m (change it in the chart panel) · Max hold '+formatHold(m.maxHoldMs)
+      : m.strategy==='straddle'
+      ? 'ACTIVE: '+m.label+' · Distance set below · No trend/momentum/spread filter — this is the A/B comparison style, not a replacement for the others.'
       : 'ACTIVE: '+m.label+' · Bias '+m.trendTf+'m → Setup '+m.setupTf+'m → LIVE trigger '+m.entryTf+'m · Max hold '+formatHold(m.maxHoldMs)+' · Fast mode evaluates live market updates; no artificial signal delay.';
   }
+  const sw=$('straddleWrap'); if(sw) sw.hidden = m.strategy!=='straddle';
 }
 function formatHold(ms){
   if(ms>=24*60*60*1000) return (ms/(24*60*60*1000)).toFixed(ms%(24*60*60*1000)?1:0)+'d';
@@ -1941,9 +2016,13 @@ function openBot(key){
   // SL/TP are dollar amounts now, symbol-agnostic — same $15/$20 default
   // everywhere, not the old per-symbol price-distance table. Never
   // auto-overwritten after this — type your own and it stays put.
-  if(!$('inSL').value) $('inSL').value = 15;
-  if(!$('inTP').value) $('inTP').value = 20;
-  $('inMinScore').value = mode().minScore;
+  // When "Lock settings" is on, none of this touches the fields at all — they
+  // stay exactly as you set them, for every pair, until you unlock it.
+  if(!state.settingsLocked){
+    if(!$('inSL').value) $('inSL').value = 15;
+    if(!$('inTP').value) $('inTP').value = 20;
+    $('inMinScore').value = mode().minScore;
+  }
   const isBn = state.broker === 'binance';
   $('slWrap').hidden = isBn; $('tpWrap').hidden = isBn; $('bnNoSlTpNote').hidden = !isBn;
   $('bnAmountHint').hidden = !isBn;
@@ -1957,8 +2036,19 @@ function openBot(key){
     // account grows — see autoLotSize()), unless the symbol's own broker minimum
     // is actually bigger (then we have to use the real minimum or the order
     // would just get rejected). You can still overtype it for any single trade.
-    const brokerMin = a.full && a.full.lotSize ? (a.full.minVolume / a.full.lotSize) : 0.01;
-    $('inLotSize').value = Math.max(autoLotSize(), brokerMin).toFixed(2);
+    // BUG FIX: for some symbols (BTC/USD in testing) minVolume/lotSize produced
+    // an absurd result (9,999,999,999,999.00 lots seen live) — almost certainly
+    // a units mismatch in what the broker sends for that symbol's lotSize field.
+    // Never trust that division past a sane ceiling; fall back to 0.01 and say
+    // so loudly instead of silently defaulting to a nonsense size.
+    let brokerMin = a.full && a.full.lotSize ? (a.full.minVolume / a.full.lotSize) : 0.01;
+    if(!isFinite(brokerMin) || brokerMin<=0 || brokerMin>=1000){
+      log('Warning: '+a.label+'\'s broker minimum lot size looked wrong ('+brokerMin+') — falling back to 0.01. Check the lot size before trading this pair.');
+      brokerMin = 0.01;
+    }
+    if(!state.settingsLocked){
+      $('inLotSize').value = Math.max(autoLotSize(), brokerMin).toFixed(2);
+    }
   }
   updateRiskSizingHint(a);
   $('dashboard').hidden = true;
@@ -2075,11 +2165,25 @@ function renderBotView(a){
   if(a.position){
     $('positionPanel').hidden = false;
     const p = a.position;
+    const digits = a.full && a.full.digits!=null ? a.full.digits : 5;
+    const dollarPerUnit = (p.volume||0)/100;
+    let legsHtml = '';
+    if(p.legs && p.legs.length>1){
+      const dir = p.side==='BUY'?1:-1;
+      legsHtml = '<div class="small" style="margin-top:8px; opacity:.85;">'+p.legs.length+'-leg stack, following the rules one by one:</div>'+
+        p.legs.map((leg,i)=>{
+          const legPnl = a.lastPrice!=null ? (a.lastPrice-leg.entryPrice)*dir*((leg.volume||0)/100) : 0;
+          return '<div class="small" style="display:flex; justify-content:space-between; padding:3px 0;">'+
+            '<span>Leg '+(i+1)+' @ '+leg.entryPrice.toFixed(digits)+'</span>'+
+            '<span class="'+(legPnl>=0?'pos':'neg')+'">'+(legPnl>=0?'+':'')+legPnl.toFixed(2)+'</span></div>';
+        }).join('');
+    }
     $('positionBox').innerHTML =
       '<div>'+ (p.side==='BUY'?'<span class="pos">BUY</span>':'<span class="neg">SELL</span>') +' '+ a.label +'</div>'+
-      '<div class="small">Entry: '+p.entryPrice.toFixed(5)+' · Volume: '+p.volume+'</div>'+
+      '<div class="small">Entry: '+p.entryPrice.toFixed(digits)+' · Volume: '+p.volume+(p.legs&&p.legs.length>1?' ('+p.legs.length+' legs)':'')+'</div>'+
       '<div style="margin-top:6px;font-size:18px;font-weight:700;" class="'+((p.floatingPnL||0)>=0?'pos':'neg')+'">'+
-        ((p.floatingPnL||0)>=0?'+':'') + (p.floatingPnL||0).toFixed(2) + '</div>';
+        ((p.floatingPnL||0)>=0?'+':'') + (p.floatingPnL||0).toFixed(2) + '</div>'+
+      legsHtml;
   } else {
     $('positionPanel').hidden = true;
   }
@@ -2344,6 +2448,70 @@ function toggleProfitLock(){
   sw.classList.toggle('on');
   state.risk.profitLockEnabled = sw.classList.contains('on');
 }
+function toggleRequireApproval(){
+  const sw=$('swRequireApproval'); if(!sw) return;
+  sw.classList.toggle('on');
+  state.requireApproval = sw.classList.contains('on');
+  if(!state.requireApproval){
+    Object.keys(pendingApprovals).forEach(k=>delete pendingApprovals[k]);
+    renderApprovalQueue();
+  }
+}
+const APPROVAL_TIMEOUT_MS = 90*1000;
+function queueApproval(a, side){
+  if(pendingApprovals[a.key]) return; // already waiting on one for this pair
+  pendingApprovals[a.key] = {side, armedAt:Date.now()};
+  log('Signal ready on '+a.label+' ('+side+') — waiting for your approval (expires in 90s).');
+  renderApprovalQueue();
+}
+function expireStaleApprovals(){
+  let changed=false;
+  Object.entries(pendingApprovals).forEach(([key,p])=>{
+    if(Date.now()-p.armedAt > APPROVAL_TIMEOUT_MS){
+      delete pendingApprovals[key];
+      const a=assets[key];
+      log('Approval for '+(a?a.label:key)+' expired unapproved — not fired.');
+      changed=true;
+    }
+  });
+  if(changed) renderApprovalQueue();
+}
+function approveTrade(key){
+  const p=pendingApprovals[key]; const a=assets[key];
+  if(!p || !a) return;
+  delete pendingApprovals[key];
+  renderApprovalQueue();
+  if(state.broker==='binance') bnExecuteTrade(a,p.side); else ctExecuteTrade(a,p.side);
+}
+function rejectTrade(key){
+  const a=assets[key];
+  delete pendingApprovals[key];
+  log('Rejected '+(a?a.label:key)+' signal — not fired.');
+  renderApprovalQueue();
+}
+function renderApprovalQueue(){
+  const box=$('approvalQueue'); if(!box) return;
+  const keys=Object.keys(pendingApprovals);
+  if(keys.length===0){ box.style.display='none'; box.innerHTML=''; return; }
+  box.style.display='block';
+  box.innerHTML = keys.map(key=>{
+    const p=pendingApprovals[key], a=assets[key];
+    if(!a) return '';
+    const secsLeft=Math.max(0,Math.round((p.armedAt+APPROVAL_TIMEOUT_MS-Date.now())/1000));
+    return '<div style="background:#0f2027; border:1px solid #22c55e; border-radius:10px; padding:10px 12px; margin:8px 12px; display:flex; justify-content:space-between; align-items:center;">'+
+      '<div><b class="'+(p.side==='BUY'?'pos':'neg')+'">'+p.side+'</b> '+a.label+' <span class="small" style="opacity:.7;">ready — expires in '+secsLeft+'s</span></div>'+
+      '<div style="display:flex; gap:8px;">'+
+        '<button class="btn-buy" style="padding:6px 14px;" onclick="approveTrade(\''+key+'\')">Approve</button>'+
+        '<button class="btn-ghost" style="padding:6px 14px;" onclick="rejectTrade(\''+key+'\')">Skip</button>'+
+      '</div></div>';
+  }).join('');
+}
+function toggleSettingsLock(){
+  const sw=$('swSettingsLock'); if(!sw) return;
+  sw.classList.toggle('on');
+  state.settingsLocked = sw.classList.contains('on');
+  log(state.settingsLocked ? 'Settings locked — lot size/SL/TP/min score now fixed for every pair.' : 'Settings unlocked — lot size will auto-scale with balance again on the next pair you open.');
+}
 
 function toggleSwitch(which){
   const isLive = state.broker === 'binance' ? state.bnEnv === 'live' : state.env === 'live';
@@ -2390,7 +2558,9 @@ function stopAllTrading(){
 
 function maybeAutoTrade(a){
   if(!state.auto || !a.lastSignal || state.stopped || a.pendingOrder) return;
-  const sig=a.lastSignal, m=mode();
+  const m=mode();
+  if(m.strategy==='straddle'){ manageStraddle(a); return; }
+  const sig=a.lastSignal;
   const minScore=Math.max(m.minScore,parseInt($('inMinScore') ? $('inMinScore').value : m.minScore)||m.minScore);
   if(!sig.tradeReady || sig.score<minScore) return;
   if(Date.now()-(a.lastTradeAt||0)<m.cooldownMs) return;
@@ -2400,13 +2570,82 @@ function maybeAutoTrade(a){
     // No forced flip: a new trade is only opened after the existing position is
     // actually closed. This prevents rapid churn while still allowing immediate
     // re-entry once a fresh setup appears.
-    if(!a.position && (sig.direction==='BUY'||sig.direction==='SELL')) bnExecuteTrade(a,sig.direction);
-    else if(a.position && sig.direction!==a.position.side && (sig.direction==='BUY'||sig.direction==='SELL')) bnExecuteTrade(a,sig.direction);
+    if(!a.position && (sig.direction==='BUY'||sig.direction==='SELL')){
+      if(state.requireApproval) queueApproval(a, sig.direction); else bnExecuteTrade(a,sig.direction);
+    } else if(a.position && sig.direction!==a.position.side && (sig.direction==='BUY'||sig.direction==='SELL')){
+      if(state.requireApproval) queueApproval(a, sig.direction); else bnExecuteTrade(a,sig.direction);
+    }
   } else {
-    if(!a.position && (sig.direction==='BUY'||sig.direction==='SELL')) ctExecuteTrade(a,sig.direction);
+    if(!a.position && (sig.direction==='BUY'||sig.direction==='SELL')){
+      if(state.requireApproval) queueApproval(a, sig.direction); else ctExecuteTrade(a,sig.direction);
+    }
   }
 }
 
+// Pending Buy Stop + Sell Stop straddle, per your A/B request — deliberately has
+// NO trend/momentum/spread filter, that's the whole point of comparing it
+// against our filtered styles. Paper-mode only for now (see manageStraddle).
+function manageStraddle(a){
+  if(a.position){ a.pendingStraddle=null; return; } // filled — normal exit machinery (SL/TP/profit-lock/max-hold) takes over from here
+  if(!a.lastPrice) return;
+  if(!canSendRealOrders()){
+    manageStraddlePaper(a);
+  } else if(!a.straddleRealWarned){
+    // Real pending-order placement + auto-cancel-the-sibling-on-fill (OCO) is
+    // genuinely more order-management complexity than I want to ship guessed
+    // and untested against a live broker. Staying paper-only until that's
+    // properly built and verified.
+    log('Pending Straddle: real-order placement isn\'t wired up for this style yet — switch Paper mode back on to test it.');
+    a.straddleRealWarned=true;
+  }
+}
+function manageStraddlePaper(a){
+  const digits=a.full && a.full.digits!=null ? a.full.digits : 5;
+  const distDollars=parseFloat($('inStraddleDist')?$('inStraddleDist').value:10)||10;
+  const rearmSec=parseFloat($('inStraddleRearm')?$('inStraddleRearm').value:90)||90;
+  const lots=parseFloat($('inLotSize').value)||autoLotSize();
+  const lotSize=a.full && a.full.lotSize ? a.full.lotSize : 10000000;
+  const minVol=a.full?a.full.minVolume:1000;
+  const step=a.full?(a.full.stepVolume||minVol):minVol;
+  const volume=Math.max(minVol, Math.round((lots*lotSize)/step)*step);
+  const dollarPerUnit=volume/100;
+  if(dollarPerUnit<=0) return;
+  const dist=distDollars/dollarPerUnit;
+  if(dist<=0) return;
+
+  if(!a.pendingStraddle){
+    a.pendingStraddle={buyPrice:a.lastPrice+dist, sellPrice:a.lastPrice-dist, armedAt:Date.now(), volume, lots};
+    log('[PAPER] Straddle armed for '+a.label+': Buy Stop '+a.pendingStraddle.buyPrice.toFixed(digits)+' / Sell Stop '+a.pendingStraddle.sellPrice.toFixed(digits)+'.');
+    if(currentAsset===a.key) renderBotView(a);
+    return;
+  }
+  const p=a.pendingStraddle;
+  if(a.lastPrice>=p.buyPrice){ fillStraddlePaper(a,'BUY',p,digits); return; }
+  if(a.lastPrice<=p.sellPrice){ fillStraddlePaper(a,'SELL',p,digits); return; }
+  if(Date.now()-p.armedAt > rearmSec*1000){
+    a.pendingStraddle={buyPrice:a.lastPrice+dist, sellPrice:a.lastPrice-dist, armedAt:Date.now(), volume, lots};
+    log('[PAPER] Straddle re-armed for '+a.label+' (untouched) — Buy Stop '+a.pendingStraddle.buyPrice.toFixed(digits)+' / Sell Stop '+a.pendingStraddle.sellPrice.toFixed(digits)+'.');
+    if(currentAsset===a.key) renderBotView(a);
+  }
+}
+function fillStraddlePaper(a, side, p, digits){
+  const entryPrice=side==='BUY'?p.buyPrice:p.sellPrice;
+  const slDollars=parseFloat($('inSL').value)||15;
+  const tpDollars=parseFloat($('inTP').value)||20;
+  const dollarPerUnit=p.volume/100;
+  const slDist=dollarPerUnit>0?slDollars/dollarPerUnit:0;
+  const tpDist=dollarPerUnit>0?tpDollars/dollarPerUnit:0;
+  const stopLossPrice=side==='BUY'?entryPrice-slDist:entryPrice+slDist;
+  const takeProfitPrice=side==='BUY'?entryPrice+tpDist:entryPrice-tpDist;
+  a.lastTradeAt=Date.now();
+  a.stackTarget=1;
+  a.position={side, entryPrice, volume:p.volume, paper:true, floatingPnL:0, openedAt:Date.now(), mode:state.tradeMode,
+    takeProfitPrice, stopLossPrice, riskDollars:slDollars, beMoved:false,
+    legs:[{entryPrice, volume:p.volume, openedAt:Date.now(), stopLossPrice, takeProfitPrice, initialRisk:slDist, rMultiple:(slDist>0?tpDist/slDist:1.5)}]};
+  a.pendingStraddle=null;
+  log('[PAPER] Straddle filled '+side+' '+a.label+' '+p.lots.toFixed(2)+' lots @ '+entryPrice.toFixed(digits)+' — other side cancelled.');
+  if(currentAsset===a.key) renderBotView(a);
+}
 function manualTrade(side){
   if(!currentAsset) return;
   const a = assets[currentAsset];
@@ -2433,7 +2672,14 @@ function ctExecuteTrade(a, side){
   // straight from cTrader — not a hardcoded "1 lot = 100,000" guess, since that's wrong
   // for metals/indices/crypto CFDs). volume = lots * lotSize (both already in cents).
   const lotSize = a.full && a.full.lotSize ? a.full.lotSize : 10000000; // 10,000,000 = standard 1.00 FX lot, used only if symbol data hasn't loaded yet
-  const lots = parseFloat($('inLotSize').value) || autoLotSize();
+  let lots = parseFloat($('inLotSize').value) || autoLotSize();
+  // Hard safety ceiling — never send an order sized like the 9,999,999,999,999
+  // lot bug that unit-mismatched broker data produced. 50 lots is already far
+  // beyond anything this app's flows should ever produce intentionally.
+  if(!isFinite(lots) || lots<=0 || lots>50){
+    log('Blocked: lot size ('+lots+') looks wrong for '+a.label+' — refusing to send this order. Check the Lot size field.');
+    return;
+  }
   const rawVolume = lots * lotSize;
   const volume = Math.max(minVol, Math.round(rawVolume/step)*step);
   const lotsUsed = volume / lotSize;
@@ -2489,18 +2735,24 @@ function ctExecuteTrade(a, side){
   }
 
   a.lastTradeAt = Date.now();
-  send(PT.NEW_ORDER_REQ, {
+  const orderPayload = {
     ctidTraderAccountId: state.accountId,
     symbolId: a.symbolId,
     orderType: 1,               // MARKET
     tradeSide: side==='BUY'?1:2,
     volume,
     relativeStopLoss: relSL,
-    relativeTakeProfit: relTP,
     comment: 'MorganAI-'+state.tradeMode,
     label: a.key
-  });
-  log('Order sent: '+side+' '+a.label+' '+lotsUsed.toFixed(2)+' lots, risking ~$'+prospectiveRisk.toFixed(2)+' (real order to '+state.env+' account)');
+  };
+  // FIX: EMA Ride mode has no fixed target, so relTP was 0 — but sending
+  // relativeTakeProfit:0 to the broker is ambiguous (some validation paths
+  // read it as "TP at entry" or reject it outright) rather than "no TP set".
+  // Omit the field entirely instead of sending a meaningless 0 — this is a
+  // real candidate for why Ride-mode real orders weren't going through.
+  if(!emaRideMode) orderPayload.relativeTakeProfit = relTP;
+  send(PT.NEW_ORDER_REQ, orderPayload);
+  log('Order sent: '+side+' '+a.label+' '+lotsUsed.toFixed(2)+' lots, risking ~$'+prospectiveRisk.toFixed(2)+' (real order to '+state.env+' account)'+(emaRideMode?' — no TP set (ride mode)':''));
 }
 
 function updateRiskSizingHint(a){
@@ -2565,8 +2817,16 @@ function trackPosition(a, posPayload){
 // i.e. once armed, keep ~90% of whatever profit is showing, above a small
 // $1.50 cushion so the trade still has room to breathe. Only ever moves the
 // stop to LOCK IN MORE — never loosens it if price pulls back before locking
-// in further. Below ~$1.67 profit this naturally clamps to breakeven (0), not
-// negative, so it can never lock in a guaranteed loss.
+// in further.
+//
+// BUG FIX: this used to start moving the stop the INSTANT profit ticked above
+// $0.00 — since lockedProfit is 0 below ~$1.67 profit, that meant the stop
+// jumped to breakeven on the very first favorable tick, and normal price
+// noise then closed the trade at exactly $0.00 over and over (confirmed live
+// in testing — dozens of $0.00 closes in a row). Now nothing happens at all
+// until profit clears a real arm threshold (state.risk.profitLockArmDollars,
+// default $2, configurable) — below that the trade keeps its original stop
+// and has genuine room to move before any protection kicks in.
 function checkBreakevenCtrader(a){
   const p=a.position;
   if(!p || !state.risk.profitLockEnabled) return;
@@ -2575,7 +2835,8 @@ function checkBreakevenCtrader(a){
   if(dollarPerUnit<=0) return;
   const dir=p.side==='BUY'?1:-1;
   const profit=(a.lastPrice-p.entryPrice)*dir*dollarPerUnit;
-  if(profit<=0) return;
+  const armAt = state.risk.profitLockArmDollars!=null ? state.risk.profitLockArmDollars : 2;
+  if(profit<armAt) return; // not enough room made yet — leave the original stop alone, let it breathe
   const lockedProfit=Math.max(0, 0.9*profit - 1.5);
   const lockedPriceOffset=lockedProfit/dollarPerUnit;
   const candidateStop = p.side==='BUY' ? p.entryPrice+lockedPriceOffset : p.entryPrice-lockedPriceOffset;
