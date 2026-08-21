@@ -283,12 +283,19 @@ a{color:var(--cyan);}
       <div class="panel">
         <h2>Risk management</h2>
         <p class="small">Execution itself is already immediate — market orders on live ticks, no artificial delay.</p>
-        <p class="small"><b>Sizing:</b> every trade uses the exact lot size (cTrader) / amount (Binance) you set on each bot's screen — not a % of balance. Set it once per symbol to match your broker's minimum (often 0.01 lot) or whatever size you actually want.</p>
-        <div class="row" style="margin-top:10px;">
-          <div><label>Breakeven trigger (× risk, 0 = off)</label><input id="inBreakeven" type="number" step="0.1" min="0" value="0.8" onchange="updateRiskSetting('breakevenTriggerR', this.value)"></div>
-          <div></div>
+        <p class="small"><b>Sizing:</b> lot size auto-scales 0.01 → 0.05 as the account grows (+0.01 every 25% growth from this session's starting balance), or set it manually per trade on each bot's screen.</p>
+        <div class="toggle" style="margin-top:10px;">
+          <div><b>Profit-lock trailing stop</b><div class="small">Once a trade is in profit, the stop continuously trails to guarantee ~90% of the current profit (minus a small $1.50 cushion so it can still breathe) — never gives back what it's already locked in.</div></div>
+          <div class="switch on" id="swProfitLock" onclick="toggleProfitLock()"></div>
         </div>
-        <p class="small" style="margin-top:8px;">Once a trade is this many multiples of its own stop distance into profit, its stop moves to entry automatically. Set to 0 to turn breakeven off entirely.</p>
+        <div class="toggle" style="margin-top:10px;">
+          <div><b>Manual news blackout</b><div class="small">No live economic calendar is wired in — this is a UTC time window you set yourself. No new entries fire inside it; open positions are untouched.</div></div>
+          <div class="switch" id="swNewsBlackout" onclick="toggleNewsBlackout()"></div>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <div><label>Blackout start (UTC, HH:MM)</label><input id="inNewsStart" type="text" placeholder="13:25" onchange="setNewsWindow()"></div>
+          <div><label>Blackout end (UTC, HH:MM)</label><input id="inNewsEnd" type="text" placeholder="13:45" onchange="setNewsWindow()"></div>
+        </div>
         <p class="small" id="dailyLossStatus" style="margin-top:8px;"></p>
       </div>
 
@@ -320,6 +327,7 @@ a{color:var(--cyan);}
         <div>
           <b id="botTitle">—</b>
           <div class="small" id="botSubtitle">—</div>
+          <div class="small" id="sessionBadge" style="margin-top:2px; color:#22c55e;">—</div>
         </div>
       </div>
 
@@ -357,14 +365,20 @@ a{color:var(--cyan);}
         <div class="row">
           <div id="volWrap"><label id="volLabel">Trade amount (USDT)</label><input id="inVolMult" type="number" min="1" value="1"></div>
           <div id="lotWrap" hidden><label>Lot size</label><input id="inLotSize" type="number" step="0.01" min="0.01" value="0.01"></div>
-          <div id="slWrap"><label>SL distance (price units)</label><input id="inSL" type="number" step="0.0001" value="0.002" oninput="if(currentAsset) updateRiskSizingHint(assets[currentAsset])"></div>
+          <div id="slWrap"><label>Stop loss ($)</label><input id="inSL" type="number" step="0.5" min="0.5" value="15" oninput="if(currentAsset) updateRiskSizingHint(assets[currentAsset])"></div>
         </div>
         <div class="row">
-          <div id="tpWrap"><label>TP distance (price units)</label><input id="inTP" type="number" step="0.0001" value="0.004"></div>
+          <div id="tpWrap"><label>Take profit ($)</label><input id="inTP" type="number" step="0.5" min="0.5" value="20"></div>
           <div><label>Min score to trade</label><input id="inMinScore" type="number" min="0" max="100" value="75"></div>
         </div>
         <div class="row">
-          <div id="stackWrap"><label>Positions to stack (cTrader paper, 1 = off)</label><input id="inStackTarget" type="number" min="1" max="5" step="1" value="1"></div>
+          <div id="stackWrap">
+            <label>Positions to stack (cTrader paper)</label>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input id="inStackTarget" type="number" min="2" max="5" step="1" value="2" style="flex:1;">
+              <div class="switch" id="swStack" onclick="toggleStackSwitch()"></div>
+            </div>
+          </div>
         </div>
         <p class="small" style="margin-top:4px;">Adds equal-size same-direction legs as each one reaches +0.5R, up to this count. Whole stack closes together — either at leg 1's original stop, or once price gives back to leg 1's entry. Equal sizing means combined risk grows with each leg added; this does not replace your daily loss/portfolio risk caps below, which still apply to every add.</p>
         <p class="small" id="riskSizingHint" style="margin-top:8px;"></p>
@@ -486,6 +500,8 @@ let state = {
   broker:'ctrader',
   tradeMode:'scalping',
   modeProtection:false,
+  stackEnabled:false, // off by default — the switch next to "Positions to stack" must be explicitly turned on
+  startBalance:null, // captured once from the first balance seen this session, see autoLotSize()
   emaTf:5, // active timeframe (minutes) for the EMA 5/13/89 strategy: 1,5,15,30,60
   clientId:'', clientSecret:'', accessToken:'', refreshToken:'',
   env:'demo', accountId:null, moneyDigits:2,
@@ -498,7 +514,8 @@ let state = {
     // as fixed internal backstops — maxSpreadPct in particular is load-bearing inside
     // the signal engine's own "Volatility/spread" confluence check, not just a gate.
     dailyLossLimitPct:5, portfolioRiskCapPct:20,
-    breakevenTriggerR:0.8, maxSpreadPct:0.08,
+    profitLockEnabled:true, maxSpreadPct:0.08,
+    newsBlackoutEnabled:false, newsStartUTC:null, newsEndUTC:null, // manual window only — no live calendar wired in
     dailyLossUsed:0, dailyDateKey:'',
     maxTradesPerDay:9999, dailyTradeCount:0,
     maxConsecutiveLosses:5, consecutiveLosses:0
@@ -554,6 +571,11 @@ function spreadOk(a){
 function riskGate(a, prospectiveRiskDollars){
   if(state.stopped){
     log('Blocked: trading is stopped. Tap RESUME TRADING on the dashboard to allow new trades again.');
+    return false;
+  }
+  if(inNewsBlackout()){
+    const fmt=(mins)=>String(Math.floor(mins/60)).padStart(2,'0')+':'+String(mins%60).padStart(2,'0');
+    log('Blocked: inside your manual news-blackout window ('+fmt(state.risk.newsStartUTC)+'-'+fmt(state.risk.newsEndUTC)+' UTC).');
     return false;
   }
   if(dailyLossLimitHit()){
@@ -1326,6 +1348,7 @@ function applyTrader(trader){
   state.moneyDigits = trader.moneyDigits || 2;
   state.balance = trader.balance / Math.pow(10, state.moneyDigits);
   if(state.paperBalance == null) state.paperBalance = state.balance;
+  if(state.startBalance == null) state.startBalance = state.balance; // reference point for auto lot-size scaling
   updateBalanceDisplay();
 }
 
@@ -1873,11 +1896,6 @@ function leanMessage(sig){
   if(l.entryLiq==='WAIT') return 'Leaning '+l.trend+', watching the live 1m candle for a trigger.';
   return 'Leaning '+l.trend+' — building confirmation.';
 }
-function modePlan(a){
-  const m=mode(), atr=atrForTF(a,m.atrTf);
-  if(!atr) return {sl:a.defSL||0,tp:a.defTP||0,atr:0,mode:m};
-  return {sl:atr*m.atrSL,tp:atr*m.atrTP,atr,mode:m};
-}
 function renderModeGrid(){
   const grid=$('modeGrid'); if(!grid) return;
   grid.innerHTML='';
@@ -1920,11 +1938,11 @@ function openBot(key){
   const a = assets[key];
   $('botTitle').textContent = a.bot;
   $('botSubtitle').textContent = a.label + ' · ' + a.name;
-  // Clean, round defaults every time — no ATR-derived long-decimal auto-fill.
-  // You can always type your own SL/TP; it will no longer get overwritten on
-  // the next tick like it used to (that was the actual bug).
-  $('inSL').value = a.defSL;
-  $('inTP').value = a.defTP;
+  // SL/TP are dollar amounts now, symbol-agnostic — same $15/$20 default
+  // everywhere, not the old per-symbol price-distance table. Never
+  // auto-overwritten after this — type your own and it stays put.
+  if(!$('inSL').value) $('inSL').value = 15;
+  if(!$('inTP').value) $('inTP').value = 20;
   $('inMinScore').value = mode().minScore;
   const isBn = state.broker === 'binance';
   $('slWrap').hidden = isBn; $('tpWrap').hidden = isBn; $('bnNoSlTpNote').hidden = !isBn;
@@ -1935,11 +1953,12 @@ function openBot(key){
     $('inVolMult').value = a.full ? Math.max(1, a.full.minNotional) : 5;
     if(a.full) updateBnAmountHint(a); else $('bnAmountHint').textContent = 'Loading this pair\'s real Binance minimum...';
   } else {
-    // Always defaults to 0.01 lots, unless the symbol's own broker minimum is
-    // actually bigger than that (then we have to use the real minimum or the
-    // order would just get rejected).
+    // Defaults to the auto-scaled lot size (0.01, growing toward 0.05 as the
+    // account grows — see autoLotSize()), unless the symbol's own broker minimum
+    // is actually bigger (then we have to use the real minimum or the order
+    // would just get rejected). You can still overtype it for any single trade.
     const brokerMin = a.full && a.full.lotSize ? (a.full.minVolume / a.full.lotSize) : 0.01;
-    $('inLotSize').value = Math.max(0.01, brokerMin).toFixed(2);
+    $('inLotSize').value = Math.max(autoLotSize(), brokerMin).toFixed(2);
   }
   updateRiskSizingHint(a);
   $('dashboard').hidden = true;
@@ -1959,9 +1978,48 @@ function showDashboard(){
   $('dashboard').hidden = false;
 }
 
+// Standard UTC session windows (not DST-adjusted — London/NY shift ±1h during
+// their own daylight-saving periods; treat this as an approximate guide).
+// Sessions commonly overlap (e.g. London/New York 12:00-16:00 UTC).
+const SESSIONS=[
+  {name:'Sydney', start:21, end:6},
+  {name:'Tokyo', start:0, end:9},
+  {name:'London', start:7, end:16},
+  {name:'New York', start:12, end:21}
+];
+function activeSessions(){
+  const h=new Date().getUTCHours();
+  return SESSIONS.filter(s=> s.start<s.end ? (h>=s.start && h<s.end) : (h>=s.start || h<s.end)).map(s=>s.name);
+}
+function renderSessionBadge(){
+  const el=$('sessionBadge'); if(!el) return;
+  const live=activeSessions();
+  el.textContent = live.length ? ('Session: '+live.join(' + ')+' open') : 'Session: between major sessions (low liquidity)';
+}
+// Manual news blackout — NOT a live economic calendar (none is wired into this
+// app). You set a UTC time window yourself (e.g. around a rate decision) and
+// no new entries fire while inside it. Existing open positions are untouched.
+function inNewsBlackout(){
+  if(!state.risk.newsBlackoutEnabled) return false;
+  const s=state.risk.newsStartUTC, e=state.risk.newsEndUTC;
+  if(s==null || e==null) return false;
+  const nowMin = new Date().getUTCHours()*60 + new Date().getUTCMinutes();
+  return s<e ? (nowMin>=s && nowMin<e) : (nowMin>=s || nowMin<e);
+}
+function toggleNewsBlackout(){
+  const sw=$('swNewsBlackout'); if(!sw) return;
+  sw.classList.toggle('on');
+  state.risk.newsBlackoutEnabled = sw.classList.contains('on');
+}
+function setNewsWindow(){
+  const parseHM = (v)=>{ const m=(v||'').match(/^(\d{1,2}):(\d{2})$/); return m?(parseInt(m[1],10)*60+parseInt(m[2],10)):null; };
+  state.risk.newsStartUTC = parseHM($('inNewsStart') ? $('inNewsStart').value : null);
+  state.risk.newsEndUTC = parseHM($('inNewsEnd') ? $('inNewsEnd').value : null);
+}
 function renderBotView(a){
   const sig = computeActiveSignal(a);
   a.lastSignal = sig; // always kept fresh — this is what auto-trade and manual BUY/SELL actually use
+  renderSessionBadge();
 
   // Refreshed on nearly every tick now (was throttled to 2.5s) so the checks and
   // score visibly move — RSI/momentum/extension numbers update live instead of
@@ -2264,6 +2322,28 @@ function updateRiskSetting(key, val){
   const n = parseFloat(val);
   state.risk[key] = isNaN(n) ? state.risk[key] : n; // fixed: old `n || old` treated 0 (e.g. breakeven off) as invalid
 }
+// Auto lot-size scaling for the 5m/1m styles: 0.01 to start, +0.01 every 25%
+// account growth from the balance first seen this session, capped at 0.05.
+// Growth thresholds are my own reasonable default, not something you specified —
+// tell me if you want different breakpoints or a different cap.
+function autoLotSize(){
+  const bal = state.paper ? state.paperBalance : state.balance;
+  const start = state.startBalance;
+  if(!start || start<=0 || !bal) return 0.01;
+  const growth = (bal-start)/start;
+  const tier = Math.min(4, Math.max(0, Math.floor(growth/0.25)));
+  return +(0.01 + tier*0.01).toFixed(2);
+}
+function toggleStackSwitch(){
+  const sw=$('swStack'); if(!sw) return;
+  sw.classList.toggle('on');
+  state.stackEnabled = sw.classList.contains('on');
+}
+function toggleProfitLock(){
+  const sw=$('swProfitLock'); if(!sw) return;
+  sw.classList.toggle('on');
+  state.risk.profitLockEnabled = sw.classList.contains('on');
+}
 
 function toggleSwitch(which){
   const isLive = state.broker === 'binance' ? state.bnEnv === 'live' : state.env === 'live';
@@ -2346,45 +2426,48 @@ function ctExecuteTrade(a, side){
   if(a.position){ log('Already in a position on '+a.label+' — close it first.'); return; }
 
   const m=mode();
-  let slDist, tpDist, emaRideMode=false;
-  if(m.strategy==='emaTrend'){
-    // Per the strategy spec: stop goes just beyond EMA89 itself, not a manual
-    // distance. "Ride" holds with no fixed target (exits on a trend flip);
-    // "Pullback" takes a fixed R multiple of that same stop distance.
-    const ema89 = a.lastSignal && a.lastSignal.ema89;
-    if(!ema89){ log('EMA89 not ready yet for '+a.label+' — wait for warm-up to finish.'); return; }
-    const digits = a.full && a.full.digits != null ? a.full.digits : 5;
-    const buffer = Math.max(a.lastPrice*0.0004, Math.pow(10,-digits)*5); // small pad beyond EMA89, scaled to the symbol
-    slDist = side==='BUY' ? Math.max(0.00001, a.lastPrice-(ema89-buffer)) : Math.max(0.00001, (ema89+buffer)-a.lastPrice);
-    emaRideMode = m.emaSub==='ride';
-    tpDist = emaRideMode ? 0 : slDist*(m.rMultiple||1.5);
-    $('inSL').value = slDist.toFixed(digits);
-    $('inTP').value = emaRideMode ? '' : tpDist.toFixed(digits);
-  } else {
-    slDist = parseFloat($('inSL').value)||a.defSL;
-    tpDist = parseFloat($('inTP').value)||a.defTP;
-  }
-  // relativeStopLoss/relativeTakeProfit must be scaled to THIS symbol's own decimal
-  // precision (cTrader's own `digits` field for it), not a hardcoded 5-digit forex
-  // assumption — that assumption is wrong for metals/indices/crypto CFDs (e.g.
-  // XAU/USD), which is exactly what produced "invalid precision" order errors.
   const digits = a.full && a.full.digits != null ? a.full.digits : 5;
-  const priceScale = Math.pow(10, digits);
-  const relSL = Math.round(slDist*priceScale);
-  const relTP = emaRideMode ? 0 : Math.round(tpDist*priceScale);
   const minVol = a.full ? a.full.minVolume : 1000;
   const step = a.full ? (a.full.stepVolume||minVol) : minVol;
   // lotSize is the broker's own contract size for THIS symbol (units per lot, in cents,
   // straight from cTrader — not a hardcoded "1 lot = 100,000" guess, since that's wrong
   // for metals/indices/crypto CFDs). volume = lots * lotSize (both already in cents).
   const lotSize = a.full && a.full.lotSize ? a.full.lotSize : 10000000; // 10,000,000 = standard 1.00 FX lot, used only if symbol data hasn't loaded yet
-
-  let volume, lotsUsed;
-  const lots = parseFloat($('inLotSize').value) || 0.01;
+  const lots = parseFloat($('inLotSize').value) || autoLotSize();
   const rawVolume = lots * lotSize;
-  volume = Math.max(minVol, Math.round(rawVolume/step)*step);
-  lotsUsed = volume / lotSize;
-  const prospectiveRisk = slDist * volume/100;
+  const volume = Math.max(minVol, Math.round(rawVolume/step)*step);
+  const lotsUsed = volume / lotSize;
+  const dollarPerPriceUnit = volume/100; // same convention used everywhere else in this file for $ P&L
+
+  let slDist, tpDist, emaRideMode=false;
+  if(m.strategy==='emaTrend'){
+    // Per the strategy spec: stop goes just beyond EMA89 itself, not a dollar
+    // amount. "Ride" holds with no fixed target (exits on a trend flip);
+    // "Pullback" takes a fixed R multiple of that same stop distance.
+    const ema89 = a.lastSignal && a.lastSignal.ema89;
+    if(!ema89){ log('EMA89 not ready yet for '+a.label+' — wait for warm-up to finish.'); return; }
+    const buffer = Math.max(a.lastPrice*0.0004, Math.pow(10,-digits)*5); // small pad beyond EMA89, scaled to the symbol
+    slDist = side==='BUY' ? Math.max(0.00001, a.lastPrice-(ema89-buffer)) : Math.max(0.00001, (ema89+buffer)-a.lastPrice);
+    emaRideMode = m.emaSub==='ride';
+    tpDist = emaRideMode ? 0 : slDist*(m.rMultiple||1.5);
+  } else {
+    // SL/TP are dollar amounts now (not price distance) — convert using this
+    // trade's own $-per-price-unit so "$15 SL" means an actual $15 risk,
+    // whatever lot size or symbol it is.
+    const slDollars = parseFloat($('inSL').value) || 15;
+    const tpDollars = parseFloat($('inTP').value) || 20;
+    slDist = slDollars / dollarPerPriceUnit;
+    tpDist = tpDollars / dollarPerPriceUnit;
+  }
+
+  // FIX: relativeStopLoss/relativeTakeProfit are ALWAYS specified in a fixed
+  // 1/100,000-of-a-price-unit scale by cTrader's own Open API spec — NOT scaled
+  // by the symbol's own digit count. Scaling by digits (the old code here) is
+  // exactly what produced "Relative stop loss has invalid precision" errors on
+  // every real order. Confirmed against cTrader's own proto docs.
+  const relSL = Math.round(slDist*100000);
+  const relTP = emaRideMode ? 0 : Math.round(tpDist*100000);
+  const prospectiveRisk = slDist * dollarPerPriceUnit;
 
   if(!riskGate(a, prospectiveRisk)) return;
 
@@ -2396,7 +2479,7 @@ function ctExecuteTrade(a, side){
     // paper exit check below would fire an instant false "target reached".
     const takeProfitPrice = emaRideMode ? null : (side==='BUY' ? entryPrice+tpDist : entryPrice-tpDist);
     const stopLossPrice = side==='BUY' ? entryPrice-slDist : entryPrice+slDist;
-    a.stackTarget = m.strategy==='emaTrend' ? 1 : Math.max(1, Math.min(5, parseInt($('inStackTarget') ? $('inStackTarget').value : 1, 10) || 1));
+    a.stackTarget = (m.strategy==='emaTrend' || !state.stackEnabled) ? 1 : Math.max(2, Math.min(5, parseInt($('inStackTarget') ? $('inStackTarget').value : 2, 10) || 2));
     a.position = {side, entryPrice, volume, paper:true, floatingPnL:0, openedAt:Date.now(), mode:state.tradeMode,
       takeProfitPrice, stopLossPrice, riskDollars: prospectiveRisk, beMoved:false, emaRide:emaRideMode,
       legs:[{entryPrice, volume, openedAt:Date.now(), stopLossPrice, takeProfitPrice, initialRisk:slDist, rMultiple: slDist>0?(tpDist/slDist):1.5}]};
@@ -2427,15 +2510,9 @@ function updateRiskSizingHint(a){
     const amt = parseFloat($('inVolMult').value)||a.full&&a.full.minNotional||0;
     el.textContent = 'Fixed sizing: every trade uses ~$' + amt.toFixed(2) + ' notional (the amount field above), not a % of balance.';
   } else {
-    const slDist = parseFloat($('inSL').value) || a.defSL;
-    const lots = parseFloat($('inLotSize').value) || 0.01;
-    const lotSize = a.full && a.full.lotSize ? a.full.lotSize : 10000000;
-    if(slDist > 0){
-      const riskDollars = slDist * (lots*lotSize) / 100;
-      el.textContent = 'Fixed sizing: every trade uses ' + lots.toFixed(2) + ' lots (risking ~$' + riskDollars.toFixed(2) + ' at current SL), not a % of balance.';
-    } else {
-      el.textContent = 'Fixed sizing: every trade uses ' + lots.toFixed(2) + ' lots (the field above), not a % of balance.';
-    }
+    const slDollars = parseFloat($('inSL').value) || 15;
+    const lots = parseFloat($('inLotSize').value) || autoLotSize();
+    el.textContent = 'Fixed sizing: every trade uses ' + lots.toFixed(2) + ' lots, risking exactly $' + slDollars.toFixed(2) + ' at your set SL — not a % of balance.';
   }
 }
 
@@ -2482,23 +2559,40 @@ function trackPosition(a, posPayload){
 // Was called on every tick but never defined — that crash was silently killing
 // renderBotView()/maybeAutoTrade() for the whole life of every open position
 // (nothing rendered, PnL froze, buttons stopped updating). Fixed here.
+// Continuous profit-lock trailing stop, per your formula fitted to your two
+// examples (profit $15 -> keep $12, profit $5 -> keep $3):
+//   lockedProfit = max(0, 0.9 * currentProfit - 1.5)
+// i.e. once armed, keep ~90% of whatever profit is showing, above a small
+// $1.50 cushion so the trade still has room to breathe. Only ever moves the
+// stop to LOCK IN MORE — never loosens it if price pulls back before locking
+// in further. Below ~$1.67 profit this naturally clamps to breakeven (0), not
+// negative, so it can never lock in a guaranteed loss.
 function checkBreakevenCtrader(a){
   const p=a.position;
-  if(!p || p.beMoved || !p.stopLossPrice) return;
-  const trigR = state.risk.breakevenTriggerR;
-  if(!trigR || trigR<=0) return; // 0 = breakeven off
-  const risk=Math.abs(p.entryPrice-p.stopLossPrice);
-  if(risk<=0) return;
-  const moved = p.side==='BUY' ? (a.lastPrice-p.entryPrice>=risk*trigR) : (p.entryPrice-a.lastPrice>=risk*trigR);
-  if(!moved) return;
+  if(!p || !state.risk.profitLockEnabled) return;
+  if(p.legs && p.legs.length>1) return; // stacked positions use their own close rule (see checkPaperExitCtrader) — this trail is for single-leg trades
+  const dollarPerUnit = (p.volume||0)/100;
+  if(dollarPerUnit<=0) return;
+  const dir=p.side==='BUY'?1:-1;
+  const profit=(a.lastPrice-p.entryPrice)*dir*dollarPerUnit;
+  if(profit<=0) return;
+  const lockedProfit=Math.max(0, 0.9*profit - 1.5);
+  const lockedPriceOffset=lockedProfit/dollarPerUnit;
+  const candidateStop = p.side==='BUY' ? p.entryPrice+lockedPriceOffset : p.entryPrice-lockedPriceOffset;
+  // Only move forward — never let this loosen a stop that's already tighter.
+  const improves = p.stopLossPrice==null ? true : (p.side==='BUY' ? candidateStop>p.stopLossPrice : candidateStop<p.stopLossPrice);
+  if(!improves) return;
+  p.stopLossPrice=candidateStop;
   p.beMoved=true;
-  p.stopLossPrice=p.entryPrice;
-  log('Breakeven armed for '+a.label+' — stop moved to entry.');
+  if(!p._lastLockLogged || Math.abs(lockedProfit-p._lastLockLogged)>=1){
+    log('Profit lock for '+a.label+': now guaranteeing ~$'+lockedProfit.toFixed(2)+' if it reverses from here.');
+    p._lastLockLogged=lockedProfit;
+  }
   if(!p.paper && p.positionId){
     send(PT.AMEND_POSITION_SLTP_REQ,{
       ctidTraderAccountId: state.accountId,
       positionId: p.positionId,
-      stopLoss: p.entryPrice,
+      stopLoss: p.stopLossPrice,
       takeProfit: p.takeProfitPrice
     });
   }
