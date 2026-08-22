@@ -222,14 +222,33 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 <div id="scrLoginCT" class="screen">
   <div class="screen-header"><div class="back" onclick="showScreen('broker')">&#8249;</div><h2>cTrader Connect</h2></div>
   <div class="screen-body config-form">
+    <p style="color:var(--dim); font-size:12px; line-height:1.5; margin-bottom:14px;">This connects to your real cTrader Open API application and a real trading account (demo or live). Nothing is sent to any third-party server — only to cTrader's own servers, straight from this page.</p>
     <label>Client ID</label><input id="ctId" placeholder="Application Client ID">
     <label>Client Secret</label><input id="ctSec" type="password" placeholder="Client Secret">
     <label>Access Token</label><input id="ctTok" type="password" placeholder="Access Token">
+    <label>Refresh Token (optional)</label><input id="ctRef" type="password" placeholder="Refresh Token">
     <label>Environment</label>
-    <select id="ctEnv"><option value="demo">Demo (Paper)</option><option value="live">Live (Real Money)</option></select>
-    <div class="tog" style="margin-top:10px;"><div><b>Remember login</b><small>Save on this device only</small></div><div class="switch" id="swRemCT" onclick="this.classList.toggle('on')"></div></div>
-    <button class="splash-btn" style="margin-top:20px; width:100%;" onclick="connectCT()">CONNECT</button>
+    <select id="ctEnv"><option value="demo">Demo account (paper money — start here)</option><option value="live">Live account (real money)</option></select>
+    <div class="tog" style="margin-top:10px;">
+      <div><b>Remember login</b><small>Saves these fields in this browser so you don't retype them. Anyone with access to this phone/browser could see them.</small></div>
+      <div class="switch" id="swRemCT" onclick="this.classList.toggle('on')"></div>
+    </div>
+    <button style="margin-top:16px; width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--txt); border-radius:14px; padding:16px; font-family:'Orbitron'; font-size:13px; font-weight:700; letter-spacing:1px; cursor:pointer;" onclick="startCtOAuth()">LOG IN WITH CTRADER TO GET A TOKEN</button>
+    <p style="color:var(--dim); font-size:11px; margin-top:6px;">Needs Client ID filled in above first. Opens cTrader's own login page in a new tab; when you approve, it sends you back here with the Access Token filled in automatically.</p>
+    <button class="splash-btn" style="margin-top:16px; width:100%;" onclick="connectCT()">CONNECT</button>
     <p id="ctStatus" style="text-align:center; color:var(--dim); font-size:12px; margin-top:10px;"></p>
+    <p style="color:var(--dim); font-size:12px; margin-top:16px;">Need the Client ID/Secret first? See the setup steps below.</p>
+  </div>
+  <div class="screen-body" style="border-top:1px solid var(--line); margin-top:4px; padding-top:16px;">
+    <div class="section-title" style="padding:0; margin-bottom:10px;">Setup steps</div>
+    <ol style="color:var(--dim); font-size:12px; line-height:1.8; padding-left:18px;">
+      <li>Go to <b style="color:var(--txt);">openapi.ctrader.com</b>, sign in, and register a new application (any name).</li>
+      <li>Copy the <b style="color:var(--txt);">Client ID</b> and <b style="color:var(--txt);">Client Secret</b> it gives you into the fields above.</li>
+      <li>In that application's settings, add this exact URL as an allowed <b style="color:var(--txt);">Redirect URI</b>: <span id="ctRedirectDisplay" style="color:var(--cyan); word-break:break-all;"></span></li>
+      <li>Come back here and tap <b style="color:var(--txt);">LOG IN WITH CTRADER TO GET A TOKEN</b> — approve access to your demo or live account.</li>
+      <li>You'll land back here with the Access Token (and Refresh Token, if your app requested it) already filled in. Turn on Remember, then tap CONNECT.</li>
+    </ol>
+    <p style="color:var(--dim); font-size:11px; margin-top:12px;">If the token exchange step fails with a network/CORS error, that's your browser blocking a direct cross-origin request to cTrader's token endpoint — a known possibility doing this without a backend. Fallback: get the Access Token manually from cTrader's own token page and paste it into the field above instead.</p>
   </div>
 </div>
 
@@ -473,18 +492,72 @@ function hideNewsModal(){$('newsModal').classList.remove('active');}
 
 // ========== STORAGE ==========
 function saveCreds(){
-  if($('swRemCT').classList.contains('on')){localStorage.setItem('tpea_ct_id',$('ctId').value);localStorage.setItem('tpea_ct_sec',$('ctSec').value);localStorage.setItem('tpea_ct_tok',$('ctTok').value);localStorage.setItem('tpea_ct_env',$('ctEnv').value);}
+  if($('swRemCT').classList.contains('on')){localStorage.setItem('tpea_ct_id',$('ctId').value);localStorage.setItem('tpea_ct_sec',$('ctSec').value);localStorage.setItem('tpea_ct_tok',$('ctTok').value);localStorage.setItem('tpea_ct_ref',$('ctRef').value);localStorage.setItem('tpea_ct_env',$('ctEnv').value);}
   if($('swRemBN').classList.contains('on')){localStorage.setItem('tpea_bn_key',$('bnKey').value);localStorage.setItem('tpea_bn_sec',$('bnSec').value);localStorage.setItem('tpea_bn_env',$('bnEnv').value);localStorage.setItem('tpea_bn_rel',$('bnRelay').value);}
   localStorage.setItem('tpea_cfg',JSON.stringify(cfg));
   localStorage.setItem('tpea_sym',state.currentSymbol);
 }
 function loadCreds(){
-  const a=localStorage.getItem('tpea_ct_id');if(a){$('ctId').value=a;$('ctSec').value=localStorage.getItem('tpea_ct_sec')||'';$('ctTok').value=localStorage.getItem('tpea_ct_tok')||'';$('ctEnv').value=localStorage.getItem('tpea_ct_env')||'demo';$('swRemCT').classList.add('on');}
+  const a=localStorage.getItem('tpea_ct_id');if(a){$('ctId').value=a;$('ctSec').value=localStorage.getItem('tpea_ct_sec')||'';$('ctTok').value=localStorage.getItem('tpea_ct_tok')||'';$('ctRef').value=localStorage.getItem('tpea_ct_ref')||'';$('ctEnv').value=localStorage.getItem('tpea_ct_env')||'demo';$('swRemCT').classList.add('on');}
   const k=localStorage.getItem('tpea_bn_key');if(k){$('bnKey').value=k;$('bnSec').value=localStorage.getItem('tpea_bn_sec')||'';$('bnEnv').value=localStorage.getItem('tpea_bn_env')||'testnet';$('bnRelay').value=localStorage.getItem('tpea_bn_rel')||'http://localhost:8788';$('swRemBN').classList.add('on');}
   const c=localStorage.getItem('tpea_cfg');if(c){cfg=JSON.parse(c);}
   const s=localStorage.getItem('tpea_sym');if(s)state.currentSymbol=s;
 }
 loadCreds();
+
+// ========== CTRADER OAUTH HELPER ==========
+// Real flow per Spotware's own docs: authorize at connect.spotware.com/apps/auth,
+// which redirects back to OUR OWN page with ?code=..., then that code is
+// exchanged for a token at openapi.ctrader.com/apps/token. This whole app
+// already sends Client Secret straight from the browser to establish its
+// WebSocket connections, so doing the token exchange the same way is
+// consistent with its existing security model — not a new category of risk.
+// Honest caveat: the token-exchange step is a direct cross-origin browser
+// fetch to cTrader's own server. If their endpoint doesn't allow that (CORS),
+// it'll fail with a network error — that's a real possible outcome of doing
+// this without a backend, not a bug in this code. Manual token entry above
+// always works as a fallback either way.
+function ctRedirectUri(){ return window.location.origin+window.location.pathname; }
+function startCtOAuth(){
+  const clientId=$('ctId').value.trim();
+  if(!clientId){alert('Enter your Client ID first.');return;}
+  saveCreds();
+  const url='https://connect.spotware.com/apps/auth?client_id='+encodeURIComponent(clientId)+'&redirect_uri='+encodeURIComponent(ctRedirectUri())+'&scope=trading';
+  window.open(url,'_blank');
+}
+async function checkOAuthCallback(){
+  const params=new URLSearchParams(window.location.search);
+  const code=params.get('code');
+  if(!code)return false;
+  history.replaceState({},'',window.location.pathname); // strip ?code= so a refresh doesn't re-trigger this
+  const clientId=$('ctId')?$('ctId').value.trim():'';
+  const clientSecret=$('ctSec')?$('ctSec').value.trim():'';
+  if(!clientId||!clientSecret){
+    log('Got an auth code back but Client ID/Secret aren\'t filled in — re-enter them and tap the OAuth button again.');
+    showScreen('loginCT');
+    return true;
+  }
+  showScreen('loginCT');
+  showLoading('Exchanging code for a token...');
+  try{
+    const url='https://openapi.ctrader.com/apps/token?grant_type=authorization_code&code='+encodeURIComponent(code)+'&redirect_uri='+encodeURIComponent(ctRedirectUri())+'&client_id='+encodeURIComponent(clientId)+'&client_secret='+encodeURIComponent(clientSecret);
+    const r=await fetch(url,{headers:{'Accept':'application/json','Content-Type':'application/json'}});
+    const j=await r.json();
+    hideLoading();
+    if(j.accessToken){
+      $('ctTok').value=j.accessToken;
+      if(j.refreshToken)$('ctRef').value=j.refreshToken;
+      saveCreds();
+      log('Token received from cTrader — Access Token filled in. Tap CONNECT.');
+    }else{
+      log('Token exchange failed: '+(j.errorDescription||j.error||JSON.stringify(j)));
+    }
+  }catch(e){
+    hideLoading();
+    log('Token exchange request failed (likely a CORS/network block on a pure client-side app) — get the token manually instead: '+e.message);
+  }
+  return true;
+}
 
 // ========== CONFIG UI ==========
 function loadConfigUI(){
@@ -1033,7 +1106,8 @@ function updateDash(){
 // ========== INIT ==========
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');
 renderSymbolList();
-showScreen('splash');
+const rd=$('ctRedirectDisplay');if(rd)rd.textContent=ctRedirectUri();
+checkOAuthCallback().then(handled=>{ if(!handled) showScreen('splash'); });
 </script>
 </body>
 </html>
