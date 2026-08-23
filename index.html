@@ -13,9 +13,15 @@
 <style>
 :root{--bg:#0a0a0f; --panel:#12121a; --panel2:#1a1a25; --line:#2a2a3a; --red:#ff0033; --red2:#ff1a1a; --cyan:#00f0ff; --green:#00ff88; --gold:#ffd700; --txt:#e8e8f0; --dim:#6b6b80;}
 *{box-sizing:border-box; -webkit-tap-highlight-color:transparent; margin:0; padding:0;}
-body{background:var(--bg); color:var(--txt); font-family:'Rajdhani',sans-serif; font-size:14px; overflow:hidden; height:100vh; -webkit-font-smoothing:antialiased;}
+body{background:var(--bg); color:var(--txt); font-family:'Rajdhani',sans-serif; font-size:14px; overflow:hidden; height:100vh; height:100dvh; -webkit-font-smoothing:antialiased;}
 h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
-#app{max-width:480px; margin:0 auto; height:100vh; display:flex; flex-direction:column; position:relative; background:var(--bg);}
+/* FIX: viewport-fit=cover draws content under the phone's status bar and
+   bottom gesture bar with nothing padding it back out, which is why the
+   last row of buttons (SAVE, etc.) was hidden under the gesture bar edge.
+   100dvh (with 100vh as a fallback for older browsers) also stops the
+   layout being taller than what's actually visible when mobile browser
+   toolbars show/hide. */
+#app{max-width:480px; margin:0 auto; height:100vh; height:100dvh; display:flex; flex-direction:column; position:relative; background:var(--bg);}
 .screen{position:absolute; inset:0; display:none; flex-direction:column; overflow:hidden;}
 .screen.active{display:flex;}
 
@@ -121,11 +127,11 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 .conn-status{position:absolute; top:12px; right:16px; z-index:10;}
 
 /* Screens: Symbols, Config */
-.screen-header{padding:16px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; position:relative;}
+.screen-header{padding:calc(16px + env(safe-area-inset-top)) 16px 16px 16px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; position:relative;}
 .screen-header .back{width:36px; height:36px; background:var(--panel); border:1px solid var(--line); border-radius:10px; display:flex; align-items:center; justify-content:center; color:var(--txt); font-size:18px; cursor:pointer;}
 .screen-header .back:active{background:var(--panel2);}
 .screen-header h2{font-family:'Orbitron'; font-size:16px; color:#fff;}
-.screen-body{flex:1; overflow-y:auto; padding:16px;}
+.screen-body{flex:1; overflow-y:auto; padding:16px 16px max(24px, calc(16px + env(safe-area-inset-bottom))) 16px;}
 
 .symbol-card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:10px; display:flex; align-items:center; gap:12px; cursor:pointer;}
 .symbol-card:active{transform:scale(0.98);}
@@ -148,7 +154,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 .switch::after{content:''; position:absolute; width:18px; height:18px; background:var(--txt); border-radius:50%; top:2px; left:2px; transition:.15s;}
 .switch.on::after{left:22px; background:var(--red);}
 
-.save-bar{display:flex; gap:10px; margin-top:20px; padding-top:10px; border-top:1px solid var(--line);}
+.save-bar{display:flex; gap:10px; margin-top:20px; padding-top:10px; border-top:1px solid var(--line); position:sticky; bottom:0; background:var(--bg); padding-bottom:max(24px, calc(14px + env(safe-area-inset-bottom))); z-index:5;}
 .save-bar button{flex:1; border:none; border-radius:12px; padding:14px; font-family:'Orbitron'; font-size:13px; font-weight:700; cursor:pointer;}
 .save-bar .btn-primary{background:linear-gradient(135deg,var(--red),var(--red2)); color:#fff;}
 .save-bar .btn-secondary{background:var(--panel2); border:1px solid var(--line); color:var(--txt);}
@@ -235,7 +241,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
     </div>
     <button style="margin-top:16px; width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--txt); border-radius:14px; padding:16px; font-family:'Orbitron'; font-size:13px; font-weight:700; letter-spacing:1px; cursor:pointer;" onclick="startCtOAuth()">LOG IN WITH CTRADER TO GET A TOKEN</button>
     <p style="color:var(--dim); font-size:11px; margin-top:6px;">Needs Client ID filled in above first. Opens cTrader's real login page; after you approve, it sends you back here with a one-time code — you'll then run a short command in Termux to turn that into your Access Token (browsers can't complete that last step directly).</p>
-    <button class="splash-btn" style="margin-top:16px; width:100%;" onclick="connectCT()">CONNECT</button>
+    <button class="splash-btn" id="ctConnectBtn" style="margin-top:16px; width:100%;" onclick="connectCT()">CONNECT</button>
     <p id="ctStatus" style="text-align:center; color:var(--dim); font-size:12px; margin-top:10px;"></p>
     <div style="border-top:1px solid var(--line); margin-top:16px; padding-top:12px;">
       <div style="font-family:'Orbitron'; font-size:11px; font-weight:700; letter-spacing:1px; color:var(--dim); margin-bottom:8px;">SETUP STEPS</div>
@@ -526,7 +532,19 @@ function showScreen(id){
   else if(id==='broker')$('scrBroker').classList.add('active');
   else if(id==='loginCT')$('scrLoginCT').classList.add('active');
   else if(id==='loginBN')$('scrLoginBN').classList.add('active');
-  else if(id==='dash')$('scrDash').classList.add('active');
+  else if(id==='dash'){
+    $('scrDash').classList.add('active');
+    // FIX (chart-blank bug): if a keyboard-triggered resize happened while
+    // this screen was hidden, the chart's canvas could still be stuck at
+    // 0 width from that. Now that the container is actually visible again,
+    // force it back to the real width and refit — cheap, and makes the
+    // chart self-heal instead of needing a manual page refresh.
+    const chartEl=document.getElementById('tvChart');
+    if(tvChart&&chartEl&&chartEl.clientWidth>0){
+      tvChart.resize(chartEl.clientWidth,220);
+      tvChart.timeScale().fitContent();
+    }
+  }
   else if(id==='symbols')$('scrSymbols').classList.add('active');
   else if(id==='config')$('scrConfig').classList.add('active');
 }
@@ -552,7 +570,7 @@ function showLoading(t){$('loadingText').textContent=t||'Loading...';$('loadingO
   clearTimeout(state.loadingTimeout);
   state.loadingTimeout=setTimeout(()=>{hideLoading();alert('Timed out waiting for a response. Check your Access Token hasn\'t expired, then try CONNECT again.');},15000);
 }
-function hideLoading(){clearTimeout(state.loadingTimeout);$('loadingOverlay').classList.remove('active');}
+function hideLoading(){clearTimeout(state.loadingTimeout);$('loadingOverlay').classList.remove('active');state.connecting=false;setConnectBtnEnabled(true);}
 
 // ========== NAVIGATION ==========
 function chooseBroker(b){state.broker=b;if(b==='ctrader'){showScreen('loginCT');$('ctEnv').onchange=()=>{};}else{showScreen('loginBN');}}
@@ -768,23 +786,49 @@ function addCustomSymbol(){
 function def_or(key){return SYM_DEFS[key]?SYM_DEFS[key].label:key;}
 
 // ========== CTRADER CONNECTION ==========
+// FIX (login flakiness bug): connectCT() had no guard against being called
+// again while an attempt was already in flight. Every tap of CONNECT opened
+// a brand new WebSocket, but they all shared the single state.ws variable —
+// so a slow-to-open earlier socket and a newer one would race, and whichever
+// one's onopen fired last would "win" state.ws even if it wasn't the one the
+// server was mid-handshake with. Messages could end up sent on one socket
+// while the server expected them on another, which is exactly what produces
+// CANT_ROUTE_REQUEST — and repeatedly tapping CONNECT "worked eventually"
+// only because it occasionally left you with just one clean connection.
+// Failed attempts also never cleared the old heartbeat interval, so retries
+// leaked a stacking setInterval. Now: ignore taps while already connecting,
+// and forcibly tear down (handlers detached first, so it can't fire stale
+// callbacks into shared state) anything left over before opening a new one.
 function connectCT(){
+  if(state.connecting){ctStatus('Already connecting — please wait...');return;}
+  state.connecting=true;
+  setConnectBtnEnabled(false);
+  if(state.ws){
+    state.ws.onopen=null;state.ws.onmessage=null;state.ws.onclose=null;state.ws.onerror=null;
+    try{state.ws.close();}catch(e){}
+    state.ws=null;
+  }
+  clearInterval(state.hbTimer);
   state.clientId=$('ctId').value.trim();state.clientSecret=$('ctSec').value.trim();state.accessToken=$('ctTok').value.trim();state.env=$('ctEnv').value;
-  if(!state.clientId||!state.clientSecret||!state.accessToken){alert('Fill all fields');return;}
+  if(!state.clientId||!state.clientSecret||!state.accessToken){state.connecting=false;setConnectBtnEnabled(true);alert('Fill all fields');return;}
   saveCreds();showLoading('Connecting to cTrader...');
   ctStatus('Opening connection...');
   const host=state.env==='live'?'wss://live.ctraderapi.com:5036':'wss://demo.ctraderapi.com:5036';
-  try{state.ws=new WebSocket(host);}catch(e){hideLoading();ctStatus('Failed to open connection: '+e.message);alert('Failed: '+e.message);return;}
-  state.ws.onopen=()=>{state.connected=true;ctStatus('Connected — authorizing application...');send(PT.APP_AUTH_REQ,{clientId:state.clientId,clientSecret:state.clientSecret});state.hbTimer=setInterval(()=>send(PT.HEARTBEAT,{}),20000);};
-  state.ws.onmessage=ev=>{let m;try{m=JSON.parse(ev.data);}catch(e){return;}handleCT(m);};
-  state.ws.onclose=ev=>{
+  let ws;
+  try{ws=new WebSocket(host);}catch(e){state.connecting=false;setConnectBtnEnabled(true);hideLoading();ctStatus('Failed to open connection: '+e.message);alert('Failed: '+e.message);return;}
+  state.ws=ws;
+  ws.onopen=()=>{if(state.ws!==ws)return;state.connected=true;ctStatus('Connected — authorizing application...');send(PT.APP_AUTH_REQ,{clientId:state.clientId,clientSecret:state.clientSecret});state.hbTimer=setInterval(()=>send(PT.HEARTBEAT,{}),20000);};
+  ws.onmessage=ev=>{if(state.ws!==ws)return;let m;try{m=JSON.parse(ev.data);}catch(e){return;}handleCT(m);};
+  ws.onclose=ev=>{
+    if(state.ws!==ws)return;
     state.connected=false;state.accountReady=false;clearInterval(state.hbTimer);setConnBadge('OFFLINE','off');
-    hideLoading();
+    state.connecting=false;setConnectBtnEnabled(true);hideLoading();
     if(!state.wasEverConnected){ctStatus('Connection closed before finishing (code '+ev.code+'). Double-check your Client ID, Client Secret and Access Token are correct, then tap CONNECT again.');}
     else if(!state.stopped){ctStatus('Connection dropped — reconnecting...');setTimeout(connectCT,2000);}
   };
-  state.ws.onerror=()=>{hideLoading();setConnBadge('ERROR','off');ctStatus('WebSocket error — connection failed.');};
+  ws.onerror=()=>{if(state.ws!==ws)return;state.connecting=false;setConnectBtnEnabled(true);hideLoading();setConnBadge('ERROR','off');ctStatus('WebSocket error — connection failed.');};
 }
+function setConnectBtnEnabled(on){const b=$('ctConnectBtn');if(b){b.disabled=!on;b.style.opacity=on?'1':'0.5';}}
 function ctStatus(msg){const el=$('ctStatus');if(el)el.textContent=msg;}
 function send(pt,payload){if(!state.ws||state.ws.readyState!==1)return null;const id='m'+(state.msgSeq++);state.ws.send(JSON.stringify({clientMsgId:id,payloadType:pt,payload}));return id;}
 
@@ -792,8 +836,34 @@ function handleCT(m){
   const pt=m.payloadType,p=m.payload||{};
   switch(pt){
     case PT.APP_AUTH_RES:ctStatus('Application authorized — fetching accounts...');send(PT.GET_ACCOUNTS_REQ,{accessToken:state.accessToken});break;
-    case PT.GET_ACCOUNTS_RES:{const accs=p.ctidTraderAccount||[];const want=state.env==='live';const ac=accs.find(a=>!!a.isLive===want)||accs[0];if(!ac){hideLoading();ctStatus('No account found on this token for the selected environment.');alert('No account found');return;}ctStatus('Found account '+ac.ctidTraderAccountId+' — authorizing...');state.accountId=ac.ctidTraderAccountId;send(PT.ACC_AUTH_REQ,{ctidTraderAccountId:state.accountId,accessToken:state.accessToken});break;}
-    case PT.ACC_AUTH_RES:state.accountReady=true;state.wasEverConnected=true;hideLoading();ctStatus('Connected.');setConnBadge(state.env==='live'?'LIVE':'DEMO',state.env==='live'?'live':'demo');send(PT.TRADER_REQ,{ctidTraderAccountId:state.accountId});send(PT.SYMBOLS_LIST_REQ,{ctidTraderAccountId:state.accountId});send(PT.RECONCILE_REQ,{ctidTraderAccountId:state.accountId,returnProtectionOrders:true});initAsset();showScreen('dash');initChart();startNewsEngine();break;
+    case PT.GET_ACCOUNTS_RES:{
+      const accs=p.ctidTraderAccount||[];
+      const want=state.env==='live';
+      // FIX: this used to fall back to accs[0] when no account matched the
+      // selected environment, which silently tried to authorize a LIVE
+      // account on the DEMO websocket host (or vice versa). cTrader rejects
+      // that mismatch with an ERROR_RES, which showed up as a confusing
+      // "token may have expired" alert — the real issue was there simply
+      // wasn't a matching-environment account on this token. No more silent
+      // fallback: log exactly what accounts this token has access to, so a
+      // missing demo/live account is obvious instead of masked.
+      // Write to the console AND the login-screen status line (not just the
+      // mini-log, which lives on the dashboard screen you haven't reached
+      // yet if login is failing) so this is actually visible when it matters.
+      const accSummary=accs.length?accs.map(a=>(a.isLive?'LIVE':'DEMO')+' #'+a.ctidTraderAccountId).join(', '):'(empty list)';
+      console.log('[cTrader] Token has '+accs.length+' account(s): '+accSummary);
+      log('Token has '+accs.length+' account(s): '+accSummary);
+      ctStatus('Token accounts: '+accSummary+' — checking for '+state.env.toUpperCase()+'...');
+      const ac=accs.find(a=>!!a.isLive===want);
+      if(!ac){
+        hideLoading();state.connecting=false;setConnectBtnEnabled(true);
+        const have=accs.length?accs.map(a=>a.isLive?'LIVE':'DEMO').join(', '):'none';
+        ctStatus('No '+state.env.toUpperCase()+' account found on this token. This token only has: '+have+'.');
+        alert('No '+state.env.toUpperCase()+' account on this token (it has: '+have+'). In cTrader, make sure a '+state.env+' account is linked to your cTrader ID and was included when you approved this app, then get a fresh token and try again.');
+        return;
+      }
+      ctStatus('Found account '+ac.ctidTraderAccountId+' — authorizing...');state.accountId=ac.ctidTraderAccountId;send(PT.ACC_AUTH_REQ,{ctidTraderAccountId:state.accountId,accessToken:state.accessToken});break;}
+    case PT.ACC_AUTH_RES:state.accountReady=true;state.wasEverConnected=true;state.connecting=false;setConnectBtnEnabled(true);hideLoading();ctStatus('Connected.');setConnBadge(state.env==='live'?'LIVE':'DEMO',state.env==='live'?'live':'demo');send(PT.TRADER_REQ,{ctidTraderAccountId:state.accountId});send(PT.SYMBOLS_LIST_REQ,{ctidTraderAccountId:state.accountId});send(PT.RECONCILE_REQ,{ctidTraderAccountId:state.accountId,returnProtectionOrders:true});initAsset();fastStartFromCache(state.currentSymbol);showScreen('dash');initChart();startNewsEngine();break;
     case PT.TRADER_RES:applyTrader(p.trader);break;
     case PT.SYMBOLS_LIST_RES:indexSymbols(p.symbol||[]);break;
     case PT.SYMBOL_BY_ID_RES:applySymbol((p.symbol||[])[0]);break;
@@ -801,7 +871,7 @@ function handleCT(m){
     case PT.SPOT_EVENT:onSpot(p);break;
     case PT.EXECUTION_EVENT:onExec(p);break;
     case PT.ORDER_ERROR_EVENT:log('Order error: '+(p.errorCode||''));break;
-    case PT.ERROR_RES:hideLoading();ctStatus('API error: '+(p.errorCode||'')+(p.description?(' — '+p.description):''));log('API error: '+(p.errorCode||''));if(p.errorCode)alert('cTrader error: '+p.errorCode+(p.description?(' — '+p.description):'')+'. Your Access Token may have expired — try logging in again.');break;
+    case PT.ERROR_RES:hideLoading();state.connecting=false;setConnectBtnEnabled(true);ctStatus('API error: '+(p.errorCode||'')+(p.description?(' — '+p.description):''));log('API error: '+(p.errorCode||''));if(p.errorCode)alert('cTrader error: '+p.errorCode+(p.description?(' — '+p.description):'')+'. Your Access Token may have expired — try logging in again.');break;
     case PT.RECONCILE_RES:(p.position||[]).forEach(pos=>trackPosition(pos));break;
   }
 }
@@ -827,8 +897,35 @@ function initAsset(){
 function initAssetBN(){initAsset();const a=state.assets[state.currentSymbol];if(a)a.bnSymbol=SYM_DEFS[state.currentSymbol].bn;bnSubscribe(a);bnSeed(a);}
 
 function indexSymbols(list){
-  state.symbolsByNorm={};list.forEach(s=>{state.symbolsByNorm[norm(s.symbolName)]=s;});
+  state.symbolsByNorm={};list.forEach(s=>{state.symbolsByNorm[norm(s.symbolName)]=s;cacheSymbolId(s.symbolName,s.symbolId);});
   activateCtSymbol(state.currentSymbol);
+}
+// SPEED: the chart used to sit empty until the full broker symbol list came
+// back, THEN it looked up this symbol's ID, THEN it requested candle
+// history — two full round trips after login before a single candle could
+// draw. Since a symbol's numeric ID on a given account/environment doesn't
+// change between sessions, cache it locally and, on reconnect, kick off the
+// candle-history request immediately using the cached ID — in parallel with
+// the fresh symbol list request, not after it. If the cached ID turns out
+// wrong (broker changed something) the normal indexSymbols() path below
+// still runs once the real list arrives and corrects it.
+function symCacheKey(sym){return 'tpea_symid_'+state.env+'_'+sym;}
+function cacheSymbolId(symbolName,id){
+  for(const key in SYM_DEFS){
+    if(SYM_DEFS[key].ctMatch.some(m=>norm(m)===norm(symbolName))){
+      try{localStorage.setItem(symCacheKey(key),id);}catch(e){}
+    }
+  }
+}
+function fastStartFromCache(sym){
+  let id;try{id=localStorage.getItem(symCacheKey(sym));}catch(e){id=null;}
+  if(!id)return;
+  const a=state.assets[sym];if(!a||a.symbolId)return; // already resolved (real list beat us here) — skip
+  id=parseInt(id,10);if(!id)return;
+  a.symbolId=id; // provisional — activateCtSymbol() will confirm/correct this once the real symbol list arrives
+  send(PT.SUBSCRIBE_SPOTS_REQ,{ctidTraderAccountId:state.accountId,symbolId:[id]});
+  fetchHistory(id);
+  log('Fast-starting '+sym+' chart from last known symbol ID while confirming with broker...');
 }
 // FIX: subscribing/fetching-history for a symbol only ever ran once, from
 // indexSymbols() right after connecting — switching symbols via the Allowed
@@ -843,9 +940,10 @@ function activateCtSymbol(sym){
   if(!hit){log(sym+' not found on this account');return;}
   const a=state.assets[sym];if(!a)return;
   if(a.symbolId===hit.symbolId&&a.dataReady)return; // already active, don't re-subscribe/re-fetch
+  const idChanged=a.symbolId!=null&&a.symbolId!==hit.symbolId;
   a.symbolId=hit.symbolId;a.full=hit;
   send(PT.SUBSCRIBE_SPOTS_REQ,{ctidTraderAccountId:state.accountId,symbolId:[hit.symbolId]});
-  fetchHistory(hit.symbolId);
+  if(idChanged||!a.dataReady)fetchHistory(hit.symbolId); // avoid a redundant re-fetch if the cached fast-start already got the right ID
 }
 function norm(s){return String(s).toUpperCase().replace(/[^A-Z]/g,'');}
 // FIX: this app was hardcoding "1 lot = 100,000 units" everywhere (volume calc,
@@ -928,7 +1026,15 @@ function initChart(){
   emaLine1=tvChart.addLineSeries({color:'#00ff88',lineWidth:1,priceLineVisible:false,lastValueVisible:false});
   emaLine2=tvChart.addLineSeries({color:'#00f0ff',lineWidth:1,priceLineVisible:false,lastValueVisible:false});
   emaLine3=tvChart.addLineSeries({color:'#ffd700',lineWidth:2,priceLineVisible:false,lastValueVisible:false});
-  window.addEventListener('resize',()=>{if(tvChart)tvChart.resize(chartEl.clientWidth,220);});
+  // FIX: this used to resize on every window 'resize' event unconditionally.
+  // On mobile, opening the keyboard while typing in Config (a different,
+  // hidden screen) also fires a window resize — and at that moment
+  // chartEl.clientWidth reads 0 because the chart's screen isn't visible,
+  // which silently shrank the chart to 0 width. Coming back to the
+  // dashboard afterward showed a dark chart with no candles: they were
+  // still there, just drawn into a 0px-wide canvas. Only resize when the
+  // container actually has real width (i.e. its screen is on-screen).
+  window.addEventListener('resize',()=>{if(tvChart&&chartEl.clientWidth>0)tvChart.resize(chartEl.clientWidth,220);});
   renderChartTfButtons();
   redrawChart();
 }
