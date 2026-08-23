@@ -268,7 +268,8 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 <!-- MAIN DASHBOARD -->
 <div id="scrDash" class="screen">
   <div class="conn-status"><span id="connBadge" class="badge off">OFFLINE</span><span id="btnRefresh" onclick="manualRefresh()" style="margin-left:8px; display:inline-block; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:4px 8px; font-size:14px; cursor:pointer;">&#8635;</span></div>
-  <div class="dash-scroll">
+  <div class="dash-scroll" id="dashScroll">
+    <div id="pullIndicator" style="text-align:center; font-size:12px; color:var(--dim); height:0; overflow:hidden; transition:height .15s; display:flex; align-items:center; justify-content:center;">&#8595; Pull to refresh</div>
     <div class="robot-hero">
       <div class="robot-img">
         <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
@@ -771,21 +772,28 @@ function connectCT(){
   state.clientId=$('ctId').value.trim();state.clientSecret=$('ctSec').value.trim();state.accessToken=$('ctTok').value.trim();state.env=$('ctEnv').value;
   if(!state.clientId||!state.clientSecret||!state.accessToken){alert('Fill all fields');return;}
   saveCreds();showLoading('Connecting to cTrader...');
+  ctStatus('Opening connection...');
   const host=state.env==='live'?'wss://live.ctraderapi.com:5036':'wss://demo.ctraderapi.com:5036';
-  try{state.ws=new WebSocket(host);}catch(e){hideLoading();alert('Failed: '+e.message);return;}
-  state.ws.onopen=()=>{state.connected=true;send(PT.APP_AUTH_REQ,{clientId:state.clientId,clientSecret:state.clientSecret});state.hbTimer=setInterval(()=>send(PT.HEARTBEAT,{}),20000);};
+  try{state.ws=new WebSocket(host);}catch(e){hideLoading();ctStatus('Failed to open connection: '+e.message);alert('Failed: '+e.message);return;}
+  state.ws.onopen=()=>{state.connected=true;ctStatus('Connected — authorizing application...');send(PT.APP_AUTH_REQ,{clientId:state.clientId,clientSecret:state.clientSecret});state.hbTimer=setInterval(()=>send(PT.HEARTBEAT,{}),20000);};
   state.ws.onmessage=ev=>{let m;try{m=JSON.parse(ev.data);}catch(e){return;}handleCT(m);};
-  state.ws.onclose=ev=>{state.connected=false;state.accountReady=false;clearInterval(state.hbTimer);setConnBadge('OFFLINE','off');if(state.wasEverConnected&&!state.stopped){setTimeout(connectCT,2000);}};
-  state.ws.onerror=()=>{hideLoading();setConnBadge('ERROR','off');};
+  state.ws.onclose=ev=>{
+    state.connected=false;state.accountReady=false;clearInterval(state.hbTimer);setConnBadge('OFFLINE','off');
+    hideLoading();
+    if(!state.wasEverConnected){ctStatus('Connection closed before finishing (code '+ev.code+'). Double-check your Client ID, Client Secret and Access Token are correct, then tap CONNECT again.');}
+    else if(!state.stopped){ctStatus('Connection dropped — reconnecting...');setTimeout(connectCT,2000);}
+  };
+  state.ws.onerror=()=>{hideLoading();setConnBadge('ERROR','off');ctStatus('WebSocket error — connection failed.');};
 }
+function ctStatus(msg){const el=$('ctStatus');if(el)el.textContent=msg;}
 function send(pt,payload){if(!state.ws||state.ws.readyState!==1)return null;const id='m'+(state.msgSeq++);state.ws.send(JSON.stringify({clientMsgId:id,payloadType:pt,payload}));return id;}
 
 function handleCT(m){
   const pt=m.payloadType,p=m.payload||{};
   switch(pt){
-    case PT.APP_AUTH_RES:send(PT.GET_ACCOUNTS_REQ,{accessToken:state.accessToken});break;
-    case PT.GET_ACCOUNTS_RES:{const accs=p.ctidTraderAccount||[];const want=state.env==='live';const ac=accs.find(a=>!!a.isLive===want)||accs[0];if(!ac){hideLoading();alert('No account found');return;}state.accountId=ac.ctidTraderAccountId;send(PT.ACC_AUTH_REQ,{ctidTraderAccountId:state.accountId,accessToken:state.accessToken});break;}
-    case PT.ACC_AUTH_RES:state.accountReady=true;state.wasEverConnected=true;hideLoading();setConnBadge(state.env==='live'?'LIVE':'DEMO',state.env==='live'?'live':'demo');send(PT.TRADER_REQ,{ctidTraderAccountId:state.accountId});send(PT.SYMBOLS_LIST_REQ,{ctidTraderAccountId:state.accountId});send(PT.RECONCILE_REQ,{ctidTraderAccountId:state.accountId,returnProtectionOrders:true});initAsset();showScreen('dash');initChart();startNewsEngine();break;
+    case PT.APP_AUTH_RES:ctStatus('Application authorized — fetching accounts...');send(PT.GET_ACCOUNTS_REQ,{accessToken:state.accessToken});break;
+    case PT.GET_ACCOUNTS_RES:{const accs=p.ctidTraderAccount||[];const want=state.env==='live';const ac=accs.find(a=>!!a.isLive===want)||accs[0];if(!ac){hideLoading();ctStatus('No account found on this token for the selected environment.');alert('No account found');return;}ctStatus('Found account '+ac.ctidTraderAccountId+' — authorizing...');state.accountId=ac.ctidTraderAccountId;send(PT.ACC_AUTH_REQ,{ctidTraderAccountId:state.accountId,accessToken:state.accessToken});break;}
+    case PT.ACC_AUTH_RES:state.accountReady=true;state.wasEverConnected=true;hideLoading();ctStatus('Connected.');setConnBadge(state.env==='live'?'LIVE':'DEMO',state.env==='live'?'live':'demo');send(PT.TRADER_REQ,{ctidTraderAccountId:state.accountId});send(PT.SYMBOLS_LIST_REQ,{ctidTraderAccountId:state.accountId});send(PT.RECONCILE_REQ,{ctidTraderAccountId:state.accountId,returnProtectionOrders:true});initAsset();showScreen('dash');initChart();startNewsEngine();break;
     case PT.TRADER_RES:applyTrader(p.trader);break;
     case PT.SYMBOLS_LIST_RES:indexSymbols(p.symbol||[]);break;
     case PT.SYMBOL_BY_ID_RES:applySymbol((p.symbol||[])[0]);break;
@@ -793,7 +801,7 @@ function handleCT(m){
     case PT.SPOT_EVENT:onSpot(p);break;
     case PT.EXECUTION_EVENT:onExec(p);break;
     case PT.ORDER_ERROR_EVENT:log('Order error: '+(p.errorCode||''));break;
-    case PT.ERROR_RES:hideLoading();log('API error: '+(p.errorCode||''));if(p.errorCode)alert('cTrader error: '+p.errorCode+(p.description?(' — '+p.description):'')+'. Your Access Token may have expired — try logging in again.');break;
+    case PT.ERROR_RES:hideLoading();ctStatus('API error: '+(p.errorCode||'')+(p.description?(' — '+p.description):''));log('API error: '+(p.errorCode||''));if(p.errorCode)alert('cTrader error: '+p.errorCode+(p.description?(' — '+p.description):'')+'. Your Access Token may have expired — try logging in again.');break;
     case PT.RECONCILE_RES:(p.position||[]).forEach(pos=>trackPosition(pos));break;
   }
 }
@@ -1355,6 +1363,39 @@ function manualRefresh(){
   log('Refreshing...');
   location.reload();
 }
+
+/* ---------------- Pull-to-refresh (dashboard) ---------------- */
+(function initPullToRefresh(){
+  const scroller = document.getElementById('dashScroll');
+  const indicator = document.getElementById('pullIndicator');
+  if(!scroller || !indicator) return;
+  const THRESHOLD = 70, MAX_PULL = 100;
+  let startY = null, pulling = false;
+
+  scroller.addEventListener('touchstart', e => {
+    if(scroller.scrollTop <= 0){ startY = e.touches[0].clientY; pulling = true; }
+    else { startY = null; pulling = false; }
+  }, {passive:true});
+
+  scroller.addEventListener('touchmove', e => {
+    if(!pulling || startY == null) return;
+    const delta = e.touches[0].clientY - startY;
+    if(delta > 0 && scroller.scrollTop <= 0){
+      const capped = Math.min(delta, MAX_PULL);
+      indicator.style.height = capped + 'px';
+      indicator.textContent = capped >= THRESHOLD ? '\u2191 Release to refresh' : '\u2193 Pull to refresh';
+    }
+  }, {passive:true});
+
+  scroller.addEventListener('touchend', () => {
+    if(!pulling) return;
+    const height = parseInt(indicator.style.height, 10) || 0;
+    indicator.style.height = '0px';
+    pulling = false; startY = null;
+    if(height >= THRESHOLD) manualRefresh();
+  }, {passive:true});
+})();
+
 function toggleAuto(){
   state.auto=!state.auto;
   $('btnAuto').classList.toggle('active',state.auto);
