@@ -503,6 +503,7 @@ const SYM_DEFS={
 let state={
   broker:'ctrader',env:'demo',connected:false,accountReady:false,accountId:null,moneyDigits:2,
   ws:null,msgSeq:0,hbTimer:null,wasEverConnected:false,ctReconnectTimer:null,
+  connecting:false,intentionalDisconnect:false,connectionGeneration:0,envSwitchTimer:null,
   paused:false,stopped:true,auto:false,paper:true,armed:false,newsTrading:false,
   balance:0,equity:0,paperBalance:10000,startBalance:null,
   wins:0,losses:0,todayPnl:0,todayKey:'',
@@ -561,8 +562,12 @@ function showScreen(id){
     // chart self-heal instead of needing a manual page refresh.
     const chartEl=document.getElementById('tvChart');
     if(tvChart&&chartEl&&chartEl.clientWidth>0){
-      tvChart.resize(chartEl.clientWidth,220);
-      tvChart.timeScale().fitContent();
+      requestAnimationFrame(()=>{
+        if(!tvChart||!chartEl||chartEl.clientWidth<=0)return;
+        tvChart.resize(chartEl.clientWidth,220);
+        if(state.assets[state.currentSymbol]&&state.assets[state.currentSymbol].bars1.length)redrawChart();
+        else tvChart.timeScale().fitContent();
+      });
     }
   }
   else if(id==='symbols')$('scrSymbols').classList.add('active');
@@ -690,6 +695,14 @@ function loadConfigUI(){
 // no trip back to the login screen needed. Closes the current connection;
 // the existing onclose auto-reconnect logic in connectCT() picks the new
 // env up automatically since it always reads state.env fresh.
+function resetCtAccountData(clearBars){
+  state.accountReady=false;state.connected=false;state.accountId=null;state.symbolsByNorm={};state.pendingTrendbarRequests={};
+  Object.values(state.assets).forEach(a=>{
+    a.symbolId=null;a.full=null;a.subscribedSymbolId=null;
+    if(clearBars){a.bars1=[];a.bars5=[];a.bars15=[];a.bars30=[];a.bars60=[];a.currentBar=null;a.dataReady=false;}
+    a.bid=null;a.ask=null;a.lastPrice=0;a.signal='WAIT';a.score=0;a.streak=0;a.floatingPnL=0;
+  });
+}
 function switchEnv(newEnv){
   if(newEnv===state.env)return;
   if(!confirm('Switch to '+(newEnv==='live'?'LIVE (real money)':'DEMO (paper money)')+' and reconnect?')){
@@ -701,7 +714,13 @@ function switchEnv(newEnv){
   saveCreds();
   log('Switching to '+newEnv.toUpperCase()+'...');
   if(state.broker==='ctrader'){
-    if(state.ws)state.ws.close(); else connectCT();
+    state.intentionalDisconnect=true;state.connectionGeneration++;
+    clearTimeout(state.ctReconnectTimer);clearTimeout(state.envSwitchTimer);clearInterval(state.hbTimer);
+    resetCtAccountData(true);
+    const oldWs=state.ws;state.ws=null;
+    if(oldWs){try{oldWs.onopen=null;oldWs.onmessage=null;oldWs.onerror=null;oldWs.onclose=null;oldWs.close(1000,'environment switch');}catch(e){}}
+    state.connecting=false;setConnBadge('OFFLINE','off');showLoading('Switching to '+newEnv.toUpperCase()+'...');
+    state.envSwitchTimer=setTimeout(()=>{state.intentionalDisconnect=false;connectCT();},800);
   }else{
     state.accountReady=false;connectBN();
   }
@@ -827,51 +846,73 @@ function def_or(key){return SYM_DEFS[key]?SYM_DEFS[key].label:key;}
 // correct the client code is, since the old session has to time out on
 // cTrader's end, not ours. This at least makes sure OUR side always sends
 // a clean close when you actually leave the page.
-window.addEventListener('pagehide',()=>{if(state.ws){try{state.ws.close(1000,'page hidden');}catch(e){}}});
+window.addEventListener('pagehide',()=>{
+  state.intentionalDisconnect=true;clearTimeout(state.ctReconnectTimer);clearTimeout(state.envSwitchTimer);clearInterval(state.hbTimer);
+  if(state.ws){try{state.ws.close(1000,'page hidden');}catch(e){}}
+});
 
+function clearCtSocket(ws,clean=true){
+  if(!ws)return;
+  try{ws.onopen=null;ws.onmessage=null;ws.onerror=null;ws.onclose=null;ws.close(clean?1000:1006,clean?'client close':'connection reset');}catch(e){}
+}
+function scheduleCtReconnect(reason){
+  if(state.intentionalDisconnect)return;
+  clearTimeout(state.ctReconnectTimer);
+  state.ctReconnectTimer=setTimeout(()=>{
+    state.ctReconnectTimer=null;
+    if(!state.intentionalDisconnect&&!state.connected&&!state.connecting)connectCT();
+  },2500);
+  ctStatus(reason||'Connection dropped — reconnecting...');
+}
 function connectCT(){
   if(state.connecting){ctStatus('Already connecting — please wait...');return;}
-  state.connecting=true;
-  setConnectBtnEnabled(false);
+  if(state.connected&&state.ws&&state.ws.readyState===1){ctStatus('Already connected.');return;}
+  clearTimeout(state.ctReconnectTimer);state.intentionalDisconnect=false;state.connecting=true;setConnectBtnEnabled(false);
   if(state.ws){
-    state.ws.onopen=null;state.ws.onmessage=null;state.ws.onclose=null;state.ws.onerror=null;
-    try{state.ws.close();}catch(e){}
-    state.ws=null;
-    clearInterval(state.hbTimer);
-    // Give the server a beat to actually process that close before we open
-    // a fresh socket for the same account — reconnecting in the same tick
-    // doesn't give it a chance to and can itself contribute to routing
-    // conflicts on flaky connections.
-    setTimeout(()=>connectCTOpen(),400);
-    return;
+    const old=state.ws;state.ws=null;clearInterval(state.hbTimer);clearCtSocket(old,true);
+    setTimeout(()=>connectCTOpen(),500);return;
   }
   connectCTOpen();
 }
 function connectCTOpen(){
   clearInterval(state.hbTimer);
   state.clientId=$('ctId').value.trim();state.clientSecret=$('ctSec').value.trim();state.accessToken=$('ctTok').value.trim();state.env=$('ctEnv').value;
-  if(!state.clientId||!state.clientSecret||!state.accessToken){state.connecting=false;setConnectBtnEnabled(true);alert('Fill all fields');return;}
-  saveCreds();showLoading('Connecting to cTrader...');
-  ctStatus('Opening connection...');
+  if(!state.clientId||!state.clientSecret||!state.accessToken){state.connecting=false;setConnectBtnEnabled(true);hideLoading();alert('Fill all fields');return;}
+  saveCreds();showLoading('Connecting to cTrader...');ctStatus('Opening '+state.env.toUpperCase()+' connection...');
   const host=state.env==='live'?'wss://live.ctraderapi.com:5036':'wss://demo.ctraderapi.com:5036';
-  let ws;
+  const generation=++state.connectionGeneration;let ws;
   try{ws=new WebSocket(host);}catch(e){state.connecting=false;setConnectBtnEnabled(true);hideLoading();ctStatus('Failed to open connection: '+e.message);alert('Failed: '+e.message);return;}
   state.ws=ws;
-  ws.onopen=()=>{if(state.ws!==ws)return;state.connected=true;ctStatus('Connected — authorizing application...');send(PT.APP_AUTH_REQ,{clientId:state.clientId,clientSecret:state.clientSecret});state.hbTimer=setInterval(()=>send(PT.HEARTBEAT,{}),20000);};
-  ws.onmessage=ev=>{if(state.ws!==ws)return;let m;try{m=JSON.parse(ev.data);}catch(e){return;}handleCT(m);};
-  ws.onclose=ev=>{
-    if(state.ws!==ws)return;
-    state.connected=false;state.accountReady=false;clearInterval(state.hbTimer);setConnBadge('OFFLINE','off');
-    state.connecting=false;setConnectBtnEnabled(true);hideLoading();
-    if(!state.wasEverConnected){ctStatus('Connection closed before finishing (code '+ev.code+'). Double-check your Client ID, Client Secret and Access Token are correct, then tap CONNECT again.');}
-    else if(!state.stopped){ctStatus('Connection dropped — reconnecting...');setTimeout(connectCT,2000);}
+  ws.onopen=()=>{
+    if(state.ws!==ws||generation!==state.connectionGeneration)return;
+    state.connected=true;ctStatus('Connected — authorizing application...');
+    send(PT.APP_AUTH_REQ,{clientId:state.clientId,clientSecret:state.clientSecret});
+    state.hbTimer=setInterval(()=>send(PT.HEARTBEAT,{}),8000);
   };
-  ws.onerror=()=>{if(state.ws!==ws)return;state.connecting=false;setConnectBtnEnabled(true);hideLoading();setConnBadge('ERROR','off');ctStatus('WebSocket error — connection failed.');};
+  ws.onmessage=ev=>{
+    if(state.ws!==ws||generation!==state.connectionGeneration)return;
+    let m;try{m=JSON.parse(ev.data);}catch(e){return;}handleCT(m);
+  };
+  ws.onclose=ev=>{
+    if(state.ws!==ws||generation!==state.connectionGeneration)return;
+    state.ws=null;state.connected=false;state.accountReady=false;clearInterval(state.hbTimer);setConnBadge('OFFLINE','off');
+    state.connecting=false;setConnectBtnEnabled(true);hideLoading();
+    if(state.intentionalDisconnect)return;
+    if(!state.wasEverConnected)ctStatus('Connection closed before finishing (code '+ev.code+'). Check the selected '+state.env.toUpperCase()+' account/token, then try CONNECT again.');
+    else scheduleCtReconnect('Connection dropped — reconnecting automatically...');
+  };
+  ws.onerror=()=>{
+    if(state.ws!==ws||generation!==state.connectionGeneration)return;
+    setConnBadge('ERROR','off');ctStatus('WebSocket error — waiting for cTrader to close the failed session...');
+  };
 }
 function setConnectBtnEnabled(on){const b=$('ctConnectBtn');if(b){b.disabled=!on;b.style.opacity=on?'1':'0.5';}}
 function ctStatus(msg){const el=$('ctStatus');if(el)el.textContent=msg;}
-function send(pt,payload){if(!state.ws||state.ws.readyState!==1)return null;const id='m'+(state.msgSeq++);state.ws.send(JSON.stringify({clientMsgId:id,payloadType:pt,payload}));return id;}
-
+function send(pt,payload){
+  if(!state.ws||state.ws.readyState!==1||(!state.accountId&&pt!==PT.APP_AUTH_REQ&&pt!==PT.GET_ACCOUNTS_REQ&&pt!==PT.HEARTBEAT))return null;
+  const id='m'+(state.msgSeq++);
+  try{state.ws.send(JSON.stringify({clientMsgId:id,payloadType:pt,payload}));return id;}catch(e){return null;}
+}
 function handleCT(m){
   const pt=m.payloadType,p=m.payload||{};
   switch(pt){
@@ -896,7 +937,7 @@ function handleCT(m){
       ctStatus('Token accounts: '+accSummary+' — checking for '+state.env.toUpperCase()+'...');
       const ac=accs.find(a=>!!a.isLive===want);
       if(!ac){
-        hideLoading();state.connecting=false;setConnectBtnEnabled(true);
+        hideLoading();state.connecting=false;state.connected=false;state.accountReady=false;state.accountId=null;setConnectBtnEnabled(true);
         const have=accs.length?accs.map(a=>a.isLive?'LIVE':'DEMO').join(', '):'none';
         ctStatus('No '+state.env.toUpperCase()+' account found on this token. This token only has: '+have+'.');
         alert('No '+state.env.toUpperCase()+' account on this token (it has: '+have+'). In cTrader, make sure a '+state.env+' account is linked to your cTrader ID and was included when you approved this app, then get a fresh token and try again.');
@@ -910,7 +951,11 @@ function handleCT(m){
     case PT.GET_TRENDBARS_RES:applyHistory(m,p);break;
     case PT.SPOT_EVENT:onSpot(p);break;
     case PT.EXECUTION_EVENT:onExec(p);break;
-    case PT.ORDER_ERROR_EVENT:log('Order error: '+(p.errorCode||''));break;
+    case PT.ORDER_ERROR_EVENT:{
+        const code=p.errorCode||'ORDER_ERROR',desc=p.description||'';
+        const friendly={TRADING_BAD_VOLUME:'Broker rejected the lot size/volume for this symbol.',TRADING_BAD_PRICES:'Broker rejected the requested price.',TRADING_BAD_STOPS:'Stop-loss distance is outside this symbol\'s allowed range.',NOT_ENOUGH_MONEY:'Not enough free margin for this order.',TRADING_DISABLED:'Trading is disabled for this symbol.',TRADING_NOT_ALLOWED:'This account is not allowed to trade.'};
+        log('Order error: '+code+(desc?' — '+desc:'')+(friendly[code]?' | '+friendly[code]:''));
+        break;}
     case PT.ERROR_RES:{
       hideLoading();state.connecting=false;
       const code=p.errorCode||'';
@@ -951,9 +996,10 @@ function handleCT(m){
         ctStatus('Request rejected: '+(p.description||'missing or invalid fields')+'. This is a bug in what was sent, not your login — please report it.');
         alert('cTrader rejected a request as invalid: '+(p.description||code)+'. This is not a token problem — no need to log in again.');
       }else if(AUTH_ERRORS.includes(code)){
+        state.accountReady=false;state.connected=false;state.accountId=null;
         setConnectBtnEnabled(true);
-        ctStatus('API error: '+code+(p.description?(' — '+p.description):''));
-        alert('cTrader error: '+code+(p.description?(' — '+p.description):'')+'. Your Access Token has likely expired — try logging in again.');
+        ctStatus('Authentication error: '+code+(p.description?(' — '+p.description):'')+'.');
+        alert('cTrader authentication error: '+code+(p.description?(' — '+p.description):'')+'. Refresh the Access Token, then connect again.');
       }else{
         setConnectBtnEnabled(true);
         ctStatus('API error: '+code+(p.description?(' — '+p.description):''));
@@ -1041,9 +1087,10 @@ function activateCtSymbol(sym){
   // Subscription state and "do we have candle data yet" are two separate
   // questions — track them with two separate flags instead of one.
   if(a.subscribedSymbolId!==hit.symbolId){
-    send(PT.SUBSCRIBE_SPOTS_REQ,{ctidTraderAccountId:state.accountId,symbolId:[hit.symbolId]});
+    send(PT.SUBSCRIBE_SPOTS_REQ,{ctidTraderAccountId:state.accountId,symbolId:[hit.symbolId],subscribeToSpotTimestamp:true});
     a.subscribedSymbolId=hit.symbolId;
   }
+  send(PT.SYMBOL_BY_ID_REQ,{ctidTraderAccountId:state.accountId,symbolId:[hit.symbolId]});
   if(idChanged||!a.dataReady)fetchHistory(hit.symbolId); // avoid a redundant re-fetch if the cached fast-start already got the right ID
 }
 function norm(s){return String(s).toUpperCase().replace(/[^A-Z]/g,'');}
@@ -1054,15 +1101,47 @@ function norm(s){return String(s).toUpperCase().replace(/[^A-Z]/g,'');}
 // different build. Always read the real value from the symbol data cTrader
 // already sent us (a.full.lotSize), falling back to the FX standard only if
 // that data hasn't loaded yet.
-function lotSizeFor(a){ return a.full && a.full.lotSize ? a.full.lotSize : 100000; }
-function volumeFor(a, lots){
-  const lotSize=lotSizeFor(a);
-  const minVol=a.full ? a.full.minVolume : lotSize/100;
-  const step=a.full ? (a.full.stepVolume||minVol) : minVol;
-  const raw=lots*lotSize;
-  return Math.max(minVol, Math.round(raw/step)*step);
+function lotSizeFor(a){
+  return a.full && Number.isFinite(Number(a.full.lotSize)) && Number(a.full.lotSize)>0 ? Number(a.full.lotSize) : 0;
 }
-function dollarPerUnitFor(volumeInBrokerUnits){ return volumeInBrokerUnits/100; } // same convention cTrader itself uses (volume is already "in cents")
+function brokerMinVolumeFor(a){
+  if(!a.full)return 0;
+  const v=Number(a.full.minVolume);
+  if(Number.isFinite(v)&&v>0)return v;
+  const lot=Number(a.full.lotSize);
+  return Number.isFinite(lot)&&lot>0?lot/100:0;
+}
+function brokerStepVolumeFor(a){
+  const min=brokerMinVolumeFor(a);
+  return a.full && Number.isFinite(Number(a.full.stepVolume)) && Number(a.full.stepVolume)>0 ? Number(a.full.stepVolume) : min;
+}
+function brokerMaxVolumeFor(a){
+  return a.full && Number.isFinite(Number(a.full.maxVolume)) && Number(a.full.maxVolume)>0 ? Number(a.full.maxVolume) : Infinity;
+}
+function normalizeLots(a,lots){
+  const lotSize=lotSizeFor(a);if(!lotSize||!Number.isFinite(lots)||lots<=0)return null;
+  const minVol=brokerMinVolumeFor(a),step=brokerStepVolumeFor(a)||minVol||1,maxVol=brokerMaxVolumeFor(a);
+  let raw=lots*lotSize;
+  if(minVol)raw=Math.max(raw,minVol);
+  if(step)raw=Math.round(raw/step)*step;
+  if(minVol)raw=Math.max(raw,minVol);
+  if(Number.isFinite(maxVol))raw=Math.min(raw,maxVol);
+  return Math.round(raw);
+}
+function volumeFor(a,lots){const v=normalizeLots(a,lots);return v==null?NaN:v;}
+function minLotsFor(a){const lotSize=lotSizeFor(a),minVol=brokerMinVolumeFor(a);return lotSize&&minVol?minVol/lotSize:null;}
+function setBrokerLotHint(a){
+  const lotSize=lotSizeFor(a),minVol=brokerMinVolumeFor(a);if(!lotSize||!minVol)return;
+  const minLots=minVol/lotSize;
+  if(!Number.isFinite(cfg.lotSize)||cfg.lotSize<minLots)cfg.lotSize=minLots;
+  const input=$('cfgLot');
+  if(input){
+    input.step=String(Math.max(0.000001,brokerStepVolumeFor(a)/lotSize));
+    input.min=String(minLots);input.value=String(cfg.lotSize);
+  }
+  log(a.label+' broker lot: min '+minLots.toFixed(6).replace(/0+$/,'').replace(/\.$/,'')+' lot');
+}
+function dollarPerUnitFor(volumeInBrokerUnits){ return volumeInBrokerUnits/100; } // cTrader volume is expressed in 0.01 base units (cents)
 function digitsFor(a){ return a.full && a.full.digits!=null ? a.full.digits : (SYM_DEFS[a.key]?SYM_DEFS[a.key].digits:5); }
 function roundToDigits(price,digits){ const s=Math.pow(10,digits); return Math.round(price*s)/s; }
 function fetchHistory(id,attempt){
@@ -1096,7 +1175,14 @@ function buildHigher(a){
 function tfBars(a,tf){
   return tf===1?a.bars1:tf===5?a.bars5:tf===15?a.bars15:tf===30?a.bars30:tf===60?a.bars60:a.bars15;
 }
-function applySymbol(sym){if(!sym)return;const a=Object.values(state.assets).find(x=>x.symbolId===sym.symbolId);if(a)a.full=sym;}
+function applySymbol(sym){
+  if(!sym)return;
+  const a=Object.values(state.assets).find(x=>x.symbolId===sym.symbolId);if(!a)return;
+  a.full=sym;
+  if(sym.digits!=null&&SYM_DEFS[a.key])SYM_DEFS[a.key].digits=Number(sym.digits);
+  setBrokerLotHint(a);
+  if(candleSeries&&a.key===state.currentSymbol)redrawChart();
+}
 function applyTrader(t){if(!t)return;state.moneyDigits=t.moneyDigits||2;state.balance=t.balance/Math.pow(10,state.moneyDigits);state.equity=t.equity/Math.pow(10,state.moneyDigits);if(state.startBalance==null)state.startBalance=state.balance;updateDash();}
 
 // ========== CHART ==========
@@ -1412,17 +1498,18 @@ function realOpen(a,side){
     // number serializes to JSON null, which the broker reports as a missing
     // field. Catch it here, locally, with a clear reason instead.
     if(!symId){log('Cannot trade '+a.label+' yet — still loading this symbol from the broker. Try again in a moment.');return;}
+    if(!a.full||!lotSizeFor(a)||!brokerMinVolumeFor(a)){log('Cannot trade '+a.label+' yet — broker lot rules are still loading.');send(PT.SYMBOL_BY_ID_REQ,{ctidTraderAccountId:state.accountId,symbolId:[symId]});return;}
     const vol=volumeFor(a,cfg.lotSize);
-    if(!Number.isFinite(vol)||vol<=0){log('Cannot trade '+a.label+': lot size not ready yet (volume calc came back '+vol+'). Try again in a moment.');return;}
+    if(!Number.isFinite(vol)||vol<=0){log('Cannot trade '+a.label+': invalid broker volume '+vol+'.');return;}
     // FIX: NEW_ORDER_REQ takes relativeStopLoss (relative distance, fixed
     // 1/100000-of-price-unit scale per cTrader's own API spec — confirmed by
     // checking their proto docs directly), not an absolute "stopLoss" price
     // field. The previous version here sent an absolute price and would very
     // likely have been rejected or misinterpreted by the broker.
-    const digits=digitsFor(a);
     const slDist=cfg.slDollars/dollarPerUnitFor(vol);
-    const relSL=Math.round(slDist*100000);
-    send(PT.NEW_ORDER_REQ,{ctidTraderAccountId:state.accountId,symbolId:symId,orderType:1,tradeSide:side==='BUY'?1:2,volume:vol,relativeStopLoss:relSL,label:'SXU'});
+    const relSL=Math.max(1,Math.round(slDist*100000));
+    const clientOrderId=('SXU-'+Date.now().toString(36)).slice(0,50);
+    send(PT.NEW_ORDER_REQ,{ctidTraderAccountId:state.accountId,symbolId:symId,orderType:1,tradeSide:side==='BUY'?1:2,volume:vol,relativeStopLoss:relSL,label:'SXU',clientOrderId});
   }else{
     bnCall('/api/binance/order',{symbol:a.bnSymbol,side:side==='BUY'?'BUY':'SELL',type:'MARKET',quantity:cfg.lotSize.toString()});
   }
@@ -1456,7 +1543,9 @@ function paperClose(a,pos){
 
 function realClose(a,pos){
   if(state.broker==='ctrader'){
-    send(PT.CLOSE_POSITION_REQ,{ctidTraderAccountId:state.accountId,positionId:pos.positionId,volume:pos.volume||0});
+    const v=Number(pos.volume);
+    if(!Number.isFinite(v)||v<=0){log('Cannot close '+a.label+': broker position volume is invalid.');return;}
+    send(PT.CLOSE_POSITION_REQ,{ctidTraderAccountId:state.accountId,positionId:pos.positionId,volume:v});
   }else{
     const side=pos.side==='BUY'?'SELL':'BUY';
     bnCall('/api/binance/order',{symbol:a.bnSymbol,side,type:'MARKET',quantity:cfg.lotSize.toString()});
