@@ -81,6 +81,22 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 .stat-box .val.pos{color:var(--green);}
 .stat-box .val.neg{color:var(--red);}
 
+.positions-panel{margin:0 16px 12px;}
+.positions-empty{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; text-align:center; font-size:12px; color:var(--dim);}
+.pos-row{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; gap:8px;}
+.pos-row .side{font-family:'Orbitron'; font-size:11px; font-weight:800; letter-spacing:1px; padding:3px 8px; border-radius:6px; flex-shrink:0;}
+.pos-row .side.BUY{color:var(--green); background:rgba(0,255,136,0.12); border:1px solid rgba(0,255,136,0.3);}
+.pos-row .side.SELL{color:var(--red); background:rgba(255,0,51,0.12); border:1px solid rgba(255,0,51,0.3);}
+.pos-row .mid{flex:1; min-width:0;}
+.pos-row .sym{font-size:13px; font-weight:700;}
+.pos-row .meta{font-size:10.5px; color:var(--dim); margin-top:2px;}
+.pos-row .pnlcol{text-align:right; flex-shrink:0;}
+.pos-row .pnl{font-family:'Orbitron'; font-size:14px; font-weight:800;}
+.pos-row .pnl.pos{color:var(--green);}
+.pos-row .pnl.neg{color:var(--red);}
+.pos-row .pnlpct{font-size:10px; color:var(--dim); margin-top:1px;}
+.pos-row .posClose{margin-top:4px; font-size:10px; color:var(--dim); text-decoration:underline; cursor:pointer;}
+
 /* Signal banner */
 .sig-banner{margin:0 16px 12px; background:linear-gradient(145deg,var(--panel),var(--panel2)); border:1px solid var(--line); border-radius:16px; padding:14px; text-align:center; position:relative; overflow:hidden;}
 .sig-banner::before{content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,transparent,var(--red),transparent); opacity:.5;}
@@ -337,6 +353,10 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
       <div class="stat-box"><div class="lbl">Equity</div><div class="val" id="stEq">$0.00</div></div>
       <div class="stat-box"><div class="lbl">Today P&L</div><div class="val" id="stToday">$0.00</div></div>
     </div>
+
+    <!-- OPEN POSITIONS (live, MT5-style) -->
+    <div class="section-title">Open Positions</div>
+    <div class="positions-panel" id="positionsPanel"></div>
 
     <!-- MANUAL BUTTONS -->
     <div class="manual-row">
@@ -799,6 +819,16 @@ function def_or(key){return SYM_DEFS[key]?SYM_DEFS[key].label:key;}
 // leaked a stacking setInterval. Now: ignore taps while already connecting,
 // and forcibly tear down (handlers detached first, so it can't fire stale
 // callbacks into shared state) anything left over before opening a new one.
+// FIX: closing the browser tab/app without the WebSocket sending a proper
+// close frame can leave cTrader's server still holding that session open
+// for a while. A later connection attempt for the same account can then
+// collide with that stale session server-side, which is what produces
+// CANT_ROUTE_REQUEST — and it can keep happening for a bit no matter how
+// correct the client code is, since the old session has to time out on
+// cTrader's end, not ours. This at least makes sure OUR side always sends
+// a clean close when you actually leave the page.
+window.addEventListener('pagehide',()=>{if(state.ws){try{state.ws.close(1000,'page hidden');}catch(e){}}});
+
 function connectCT(){
   if(state.connecting){ctStatus('Already connecting — please wait...');return;}
   state.connecting=true;
@@ -807,7 +837,17 @@ function connectCT(){
     state.ws.onopen=null;state.ws.onmessage=null;state.ws.onclose=null;state.ws.onerror=null;
     try{state.ws.close();}catch(e){}
     state.ws=null;
+    clearInterval(state.hbTimer);
+    // Give the server a beat to actually process that close before we open
+    // a fresh socket for the same account — reconnecting in the same tick
+    // doesn't give it a chance to and can itself contribute to routing
+    // conflicts on flaky connections.
+    setTimeout(()=>connectCTOpen(),400);
+    return;
   }
+  connectCTOpen();
+}
+function connectCTOpen(){
   clearInterval(state.hbTimer);
   state.clientId=$('ctId').value.trim();state.clientSecret=$('ctSec').value.trim();state.accessToken=$('ctTok').value.trim();state.env=$('ctEnv').value;
   if(!state.clientId||!state.clientSecret||!state.accessToken){state.connecting=false;setConnectBtnEnabled(true);alert('Fill all fields');return;}
@@ -871,7 +911,55 @@ function handleCT(m){
     case PT.SPOT_EVENT:onSpot(p);break;
     case PT.EXECUTION_EVENT:onExec(p);break;
     case PT.ORDER_ERROR_EVENT:log('Order error: '+(p.errorCode||''));break;
-    case PT.ERROR_RES:hideLoading();state.connecting=false;setConnectBtnEnabled(true);ctStatus('API error: '+(p.errorCode||'')+(p.description?(' — '+p.description):''));log('API error: '+(p.errorCode||''));if(p.errorCode)alert('cTrader error: '+p.errorCode+(p.description?(' — '+p.description):'')+'. Your Access Token may have expired — try logging in again.');break;
+    case PT.ERROR_RES:{
+      hideLoading();state.connecting=false;
+      const code=p.errorCode||'';
+      log('API error: '+code+(p.description?(' — '+p.description):''));
+      // FIX: this used to tell you "Your Access Token may have expired" for
+      // EVERY error code, including ones that have nothing to do with your
+      // token at all (ALREADY_SUBSCRIBED, INVALID_REQUEST, etc.) — which is
+      // both wrong and actively harmful: it trains you to keep re-logging-in
+      // for problems a fresh login can't fix, and each unnecessary reconnect
+      // attempt is exactly what causes CANT_ROUTE_REQUEST pileups below.
+      // Only the error codes that actually mean "your token/session is bad"
+      // get the re-login message now; everything else gets its own accurate
+      // explanation.
+      const AUTH_ERRORS=['OA_AUTH_TOKEN_EXPIRED','INVALID_ACCESS_TOKEN','ACCOUNT_NOT_AUTHORIZED','CLIENT_AUTH_FAILURE','UNAUTHORIZED'];
+      if(code==='CANT_ROUTE_REQUEST'){
+        // Server-side routing conflict — usually a previous session for this
+        // account hasn't been cleaned up on cTrader's end yet (e.g. the app
+        // was closed/backgrounded earlier without a clean disconnect). This
+        // is NOT actually your access token expiring, despite what it might
+        // look like — retrying immediately tends to just add to the pileup,
+        // so force a short cooldown instead of letting CONNECT be tapped
+        // straight away.
+        ctStatus('cTrader is still clearing a previous session for this account. Waiting 20s before you can retry...');
+        setConnectBtnEnabled(false);
+        let secs=20;
+        const iv=setInterval(()=>{
+          secs--;
+          if(secs<=0){clearInterval(iv);setConnectBtnEnabled(true);ctStatus('You can try CONNECT again now.');}
+          else ctStatus('cTrader is still clearing a previous session for this account. Waiting '+secs+'s before you can retry...');
+        },1000);
+      }else if(code==='ALREADY_SUBSCRIBED'){
+        // Harmless — a price feed subscription arrived twice for the same
+        // symbol (normal on a fast reconnect). Doesn't need your attention
+        // or an alert; the feed is fine either way.
+        ctStatus('(Already subscribed to this symbol\'s price feed — no action needed.)');
+      }else if(code==='INVALID_REQUEST'){
+        setConnectBtnEnabled(true);
+        ctStatus('Request rejected: '+(p.description||'missing or invalid fields')+'. This is a bug in what was sent, not your login — please report it.');
+        alert('cTrader rejected a request as invalid: '+(p.description||code)+'. This is not a token problem — no need to log in again.');
+      }else if(AUTH_ERRORS.includes(code)){
+        setConnectBtnEnabled(true);
+        ctStatus('API error: '+code+(p.description?(' — '+p.description):''));
+        alert('cTrader error: '+code+(p.description?(' — '+p.description):'')+'. Your Access Token has likely expired — try logging in again.');
+      }else{
+        setConnectBtnEnabled(true);
+        ctStatus('API error: '+code+(p.description?(' — '+p.description):''));
+        alert('cTrader error: '+code+(p.description?(' — '+p.description):''));
+      }
+      break;}
     case PT.RECONCILE_RES:(p.position||[]).forEach(pos=>trackPosition(pos));break;
   }
 }
@@ -924,6 +1012,7 @@ function fastStartFromCache(sym){
   id=parseInt(id,10);if(!id)return;
   a.symbolId=id; // provisional — activateCtSymbol() will confirm/correct this once the real symbol list arrives
   send(PT.SUBSCRIBE_SPOTS_REQ,{ctidTraderAccountId:state.accountId,symbolId:[id]});
+  a.subscribedSymbolId=id; // tracked separately from dataReady — see activateCtSymbol
   fetchHistory(id);
   log('Fast-starting '+sym+' chart from last known symbol ID while confirming with broker...');
 }
@@ -939,10 +1028,22 @@ function activateCtSymbol(sym){
   let hit=null;for(const m of def.ctMatch){const s=state.symbolsByNorm[norm(m)];if(s){hit=s;break;}}
   if(!hit){log(sym+' not found on this account');return;}
   const a=state.assets[sym];if(!a)return;
-  if(a.symbolId===hit.symbolId&&a.dataReady)return; // already active, don't re-subscribe/re-fetch
+  if(a.symbolId===hit.symbolId&&a.dataReady&&a.subscribedSymbolId===hit.symbolId)return; // fully settled, nothing to do
   const idChanged=a.symbolId!=null&&a.symbolId!==hit.symbolId;
   a.symbolId=hit.symbolId;a.full=hit;
-  send(PT.SUBSCRIBE_SPOTS_REQ,{ctidTraderAccountId:state.accountId,symbolId:[hit.symbolId]});
+  // FIX: this used to gate re-subscribing on BOTH symbolId matching AND
+  // dataReady being true. dataReady only flips once candle history finishes
+  // loading (a separate, slower round trip) — so whenever fastStartFromCache()
+  // had already subscribed using the cached ID, and the real symbol list then
+  // confirmed the SAME id before history finished, dataReady was still false
+  // and this fired a second SUBSCRIBE_SPOTS_REQ for a symbol already
+  // subscribed. cTrader correctly rejects that as ALREADY_SUBSCRIBED.
+  // Subscription state and "do we have candle data yet" are two separate
+  // questions — track them with two separate flags instead of one.
+  if(a.subscribedSymbolId!==hit.symbolId){
+    send(PT.SUBSCRIBE_SPOTS_REQ,{ctidTraderAccountId:state.accountId,symbolId:[hit.symbolId]});
+    a.subscribedSymbolId=hit.symbolId;
+  }
   if(idChanged||!a.dataReady)fetchHistory(hit.symbolId); // avoid a redundant re-fetch if the cached fast-start already got the right ID
 }
 function norm(s){return String(s).toUpperCase().replace(/[^A-Z]/g,'');}
@@ -1302,7 +1403,17 @@ function paperOpen(a,side){
 function realOpen(a,side){
   if(!state.armed){log('LIVE NOT ARMED');return;}
   if(state.broker==='ctrader'){
-    const symId=a.symbolId;const vol=volumeFor(a,cfg.lotSize);
+    const symId=a.symbolId;
+    // FIX: this is what produced "INVALID_REQUEST — missing required fields:
+    // volume" from the broker, wrongly shown to you as a token-expiry alert.
+    // volumeFor() can come back as 0/NaN when a symbol's lot-size details
+    // (a.full) haven't loaded yet — e.g. tapping BUY/SELL right after a
+    // symbol switch, before SYMBOL_BY_ID_RES arrives. Sending that broken
+    // number serializes to JSON null, which the broker reports as a missing
+    // field. Catch it here, locally, with a clear reason instead.
+    if(!symId){log('Cannot trade '+a.label+' yet — still loading this symbol from the broker. Try again in a moment.');return;}
+    const vol=volumeFor(a,cfg.lotSize);
+    if(!Number.isFinite(vol)||vol<=0){log('Cannot trade '+a.label+': lot size not ready yet (volume calc came back '+vol+'). Try again in a moment.');return;}
     // FIX: NEW_ORDER_REQ takes relativeStopLoss (relative distance, fixed
     // 1/100000-of-price-unit scale per cTrader's own API spec — confirmed by
     // checking their proto docs directly), not an absolute "stopLoss" price
@@ -1322,6 +1433,15 @@ function closeAllPositions(a){
   a.positions.forEach(pos=>{if(pos.paper)paperClose(a,pos);else realClose(a,pos);});
   a.positions=[];a.lastCloseAt=Date.now();
   updateDash();
+}
+// Closes one specific position (by asset key + index in a.positions) instead
+// of the whole basket — used by the Open Positions panel's per-row close
+// button, mirroring how MT5 lets you close individual tickets.
+function closeOnePosition(symKey,idx){
+  const a=state.assets[symKey];if(!a)return;
+  const pos=a.positions[idx];if(!pos)return;
+  if(pos.paper){paperClose(a,pos);a.positions.splice(idx,1);updateDash();}
+  else{realClose(a,pos);} // real close removes it from a.positions once EXECUTION_EVENT confirms the fill
 }
 
 function paperClose(a,pos){
@@ -1417,7 +1537,9 @@ function onExec(p){
       if(p.positionId&&p.volume>0){
         const side=p.tradeSide===1?'BUY':'SELL';
         const entry=p.price?p.price/1e5:0;
-        a.positions.push({positionId:p.positionId,side,entryPrice:entry,volume:p.volume,stopLoss:null,takeProfit:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false,initialRisk:cfg.slDollars/dollarPerUnitFor(p.volume)});
+        if(!a.positions.some(x=>x.positionId===p.positionId)){
+          a.positions.push({positionId:p.positionId,side,entryPrice:entry,volume:p.volume,stopLoss:null,takeProfit:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false,initialRisk:cfg.slDollars/dollarPerUnitFor(p.volume)});
+        }
         log('Filled '+side+' '+a.label+' @ '+entry.toFixed(digits));
       }
       if(p.closedVolume>0){
@@ -1441,6 +1563,11 @@ function onExec(p){
 function trackPosition(pos){
   const a=Object.values(state.assets).find(x=>x.symbolId===pos.tradeData.symbolId);
   if(!a)return;
+  // FIX: no dedup here meant calling this twice for the same broker position
+  // (e.g. RECONCILE_RES arriving again from a manual refresh) pushed a
+  // second, duplicate entry — doubling P&L, doubling the positions list,
+  // and doubling what CLOSE_POSITION_REQ would think it needs to close.
+  if(a.positions.some(x=>x.positionId===pos.positionId))return;
   const side=pos.tradeData.tradeSide===1?'BUY':'SELL';
   const entry=pos.price?pos.price/1e5:0;
   a.positions.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:pos.stopLoss?pos.stopLoss/1e5:null,takeProfit:pos.takeProfit?pos.takeProfit/1e5:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false});
@@ -1459,15 +1586,30 @@ function toggleStop(){
   $('btnStop').classList.toggle('stop-active',state.stopped);
   if(state.stopped){closeAll();log('STOPPED - All closed');}else{log('RESTARTED');}
 }
-// Manual refresh: this app fixes body to 100vh with overflow hidden so its
-// screen-switching shell works at all (fixed headers, only inner content
-// scrolls) — but that also means the browser never sees a page-level
-// overscroll, so native pull-to-refresh can't fire. This button is the
-// substitute: a full reload, which re-connects cleanly and pulls saved
-// credentials back in automatically if "Remember" was on.
+// FIX: this used to be a full location.reload() — which is exactly what
+// produced "it jumps back to the main page in the middle of a trade": an
+// accidental pull-to-refresh (very easy to trigger just scrolling up to check
+// the dashboard while a trade is open) wiped the entire app state and dropped
+// you back on the splash/login screen, needing a full reconnect. There was
+// never a real need for that — the WebSocket already streams live prices;
+// "refresh" only ever needed to re-pull balance/positions/symbol data over
+// the connection that's already open. Falls back to a real reload only if
+// the connection is actually down, since then there's nothing to resync.
 function manualRefresh(){
-  log('Refreshing...');
-  location.reload();
+  if((state.broker==='ctrader'&&state.connected&&state.accountReady)){
+    log('Refreshing account & position data...');
+    send(PT.TRADER_REQ,{ctidTraderAccountId:state.accountId});
+    send(PT.RECONCILE_REQ,{ctidTraderAccountId:state.accountId,returnProtectionOrders:true});
+    const a=state.assets[state.currentSymbol];
+    if(a&&a.symbolId)send(PT.SYMBOL_BY_ID_REQ,{ctidTraderAccountId:state.accountId,symbolId:[a.symbolId]});
+    updateDash();
+  }else if(state.broker==='binance'&&state.accountReady){
+    log('Refreshing account data...');
+    (async()=>{try{const acct=await bnCall('/api/binance/account',{});if(!acct.error)applyBNAccount(acct);updateDash();}catch(e){}})();
+  }else{
+    log('Not connected — reloading app...');
+    location.reload();
+  }
 }
 
 /* ---------------- Pull-to-refresh (dashboard) ---------------- */
@@ -1530,6 +1672,45 @@ function updateDash(){
   const sig=$('sigText');if(sig){sig.textContent=a.signal;sig.className='sig '+a.signal;}
   setText('sigScore','Signal strength: '+a.score+'% | Streak: '+a.streak);
   setText('robotMeta',STRATEGY_LABELS[cfg.strategy]+' &bull; '+a.label+' &bull; '+(state.auto?'Auto':'Manual')+(state.newsBlackout?' &bull; NEWS BLACKOUT':'')+(state.newsMode?' &bull; NEWS MODE':''));
+  renderPositionsPanel();
+}
+
+// Always-visible open positions, across every symbol the bot holds — not
+// just the one currently selected — each with its own live $ and % P&L,
+// same idea as MT5's Trade tab. Rebuilds every updateDash() call (i.e. on
+// every price tick for whichever symbol just moved), so numbers move live
+// instead of only refreshing when you happen to switch screens.
+function renderPositionsPanel(){
+  const panel=$('positionsPanel');if(!panel)return;
+  const rows=[];
+  Object.values(state.assets).forEach(a=>{
+    (a.positions||[]).forEach((p,idx)=>{
+      rows.push({a,p,idx});
+    });
+  });
+  if(!rows.length){
+    panel.innerHTML='<div class="positions-empty">No open positions right now.</div>';
+    return;
+  }
+  panel.innerHTML=rows.map(({a,p,idx})=>{
+    const pnl=p.floatingPnL||0;
+    const digits=digitsFor(a);
+    const notional=Math.abs(p.entryPrice*dollarPerUnitFor(p.volume))||1;
+    const pnlPct=(pnl/notional)*100;
+    const lots=(p.volume/lotSizeFor(a)).toFixed(2);
+    return '<div class="pos-row">'
+      +'<div class="side '+p.side+'">'+p.side+'</div>'
+      +'<div class="mid">'
+        +'<div class="sym">'+a.label+'</div>'
+        +'<div class="meta">'+lots+' lot &bull; entry '+p.entryPrice.toFixed(digits)+' &bull; now '+(a.lastPrice?a.lastPrice.toFixed(digits):'—')+(p.paper?' &bull; paper':'')+'</div>'
+      +'</div>'
+      +'<div class="pnlcol">'
+        +'<div class="pnl '+(pnl>=0?'pos':'neg')+'">'+fmtPnL(pnl)+'</div>'
+        +'<div class="pnlpct">'+(pnlPct>=0?'+':'')+pnlPct.toFixed(2)+'%</div>'
+        +'<div class="posClose" onclick="closeOnePosition(\''+a.key+'\','+idx+')">close</div>'
+      +'</div>'
+    +'</div>';
+  }).join('');
 }
 
 // ========== INIT ==========
