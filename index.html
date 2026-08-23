@@ -441,7 +441,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 </div>
 
 <!-- LOADING OVERLAY -->
-<div id="loadingOverlay" class="loading-overlay"><div class="spinner"></div><p id="loadingText">Connecting...</p></div>
+<div id="loadingOverlay" class="loading-overlay" onclick="hideLoading();log('Loading screen dismissed manually.');"><div class="spinner"></div><p id="loadingText">Connecting...</p><p style="font-size:11px; color:var(--dim); margin-top:10px;">Tap anywhere to cancel</p></div>
 
 <script>
 
@@ -541,8 +541,17 @@ function fmtPnL(n){return (n>=0?'+':'')+n.toFixed(2);}
 function todayKey(){return new Date().toISOString().slice(0,10);}
 function resetDaily(){const k=todayKey();if(state.todayKey!==k){state.todayKey=k;state.todayPnl=0;state.wins=0;state.losses=0;}}
 function setConnBadge(txt,cls){const b=$('connBadge');if(b){b.textContent=txt;b.className='badge '+cls;}}
-function showLoading(t){$('loadingText').textContent=t||'Loading...';$('loadingOverlay').classList.add('active');}
-function hideLoading(){$('loadingOverlay').classList.remove('active');}
+function showLoading(t){$('loadingText').textContent=t||'Loading...';$('loadingOverlay').classList.add('active');
+  // FIX: this could hang forever if the broker responds with an error partway
+  // through login instead of the expected next step (confirmed: ERROR_RES was
+  // logged but never called hideLoading()) — you'd be stuck on this screen
+  // with literally no way out, since the refresh button only exists on the
+  // dashboard you can't reach. Auto-clears after 15s no matter what, and the
+  // overlay itself is now tappable to dismiss immediately.
+  clearTimeout(state.loadingTimeout);
+  state.loadingTimeout=setTimeout(()=>{hideLoading();alert('Timed out waiting for a response. Check your Access Token hasn\'t expired, then try CONNECT again.');},15000);
+}
+function hideLoading(){clearTimeout(state.loadingTimeout);$('loadingOverlay').classList.remove('active');}
 
 // ========== NAVIGATION ==========
 function chooseBroker(b){state.broker=b;if(b==='ctrader'){showScreen('loginCT');$('ctEnv').onchange=()=>{};}else{showScreen('loginBN');}}
@@ -784,7 +793,7 @@ function handleCT(m){
     case PT.SPOT_EVENT:onSpot(p);break;
     case PT.EXECUTION_EVENT:onExec(p);break;
     case PT.ORDER_ERROR_EVENT:log('Order error: '+(p.errorCode||''));break;
-    case PT.ERROR_RES:log('API error: '+(p.errorCode||''));break;
+    case PT.ERROR_RES:hideLoading();log('API error: '+(p.errorCode||''));if(p.errorCode)alert('cTrader error: '+p.errorCode+(p.description?(' — '+p.description):'')+'. Your Access Token may have expired — try logging in again.');break;
     case PT.RECONCILE_RES:(p.position||[]).forEach(pos=>trackPosition(pos));break;
   }
 }
