@@ -40,8 +40,8 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 .robot-sub{font-size:11px; color:var(--dim); letter-spacing:4px; margin-top:4px;}
 
 /* Control bar */
-.ctrl-bar{display:flex; justify-content:center; gap:12px; padding:0 20px; margin:12px 0;}
-.ctrl-pill{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px 20px; min-width:80px; text-align:center; cursor:pointer; transition:all .15s;}
+.ctrl-bar{display:flex; flex-wrap:wrap; justify-content:center; gap:10px; padding:0 20px; margin:12px 0;}
+.ctrl-pill{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px 16px; min-width:68px; text-align:center; cursor:pointer; transition:all .15s;}
 .ctrl-pill:active{transform:scale(0.95);}
 .ctrl-pill .icon{font-size:18px; margin-bottom:4px;}
 .ctrl-pill .lbl{font-family:'Orbitron'; font-size:10px; font-weight:700; letter-spacing:1px; color:var(--dim);}
@@ -237,17 +237,16 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
     <p style="color:var(--dim); font-size:11px; margin-top:6px;">Needs Client ID filled in above first. Opens cTrader's real login page; after you approve, it sends you back here with a one-time code — you'll then run a short command in Termux to turn that into your Access Token (browsers can't complete that last step directly).</p>
     <button class="splash-btn" style="margin-top:16px; width:100%;" onclick="connectCT()">CONNECT</button>
     <p id="ctStatus" style="text-align:center; color:var(--dim); font-size:12px; margin-top:10px;"></p>
-    <p style="color:var(--dim); font-size:12px; margin-top:16px;">Need the Client ID/Secret first? See the setup steps below.</p>
-  </div>
-  <div class="screen-body" style="border-top:1px solid var(--line); margin-top:4px; padding-top:16px;">
-    <div class="section-title" style="padding:0; margin-bottom:10px;">Setup steps</div>
-    <ol style="color:var(--dim); font-size:12px; line-height:1.8; padding-left:18px;">
-      <li>Go to <b style="color:var(--txt);">openapi.ctrader.com</b>, sign in, and register a new application (any name).</li>
-      <li>Copy the <b style="color:var(--txt);">Client ID</b> and <b style="color:var(--txt);">Client Secret</b> it gives you into the fields above.</li>
-      <li>In that application's settings, add this exact URL as an allowed <b style="color:var(--txt);">Redirect URI</b>: <span id="ctRedirectDisplay" style="color:var(--cyan); word-break:break-all;"></span></li>
-      <li>Come back here and tap <b style="color:var(--txt);">LOG IN WITH CTRADER TO GET A TOKEN</b> — approve access to your demo or live account.</li>
-      <li>You'll land back here with a ready-made command — copy it, run it in Termux, then paste the <b style="color:var(--txt);">accessToken</b> value from the reply into the Access Token field above. Turn on Remember, then tap CONNECT.</li>
-    </ol>
+    <div style="border-top:1px solid var(--line); margin-top:16px; padding-top:12px;">
+      <div style="font-family:'Orbitron'; font-size:11px; font-weight:700; letter-spacing:1px; color:var(--dim); margin-bottom:8px;">SETUP STEPS</div>
+      <ol style="color:var(--dim); font-size:11px; line-height:1.6; padding-left:16px; margin:0;">
+        <li>Go to <b style="color:var(--txt);">openapi.ctrader.com</b>, sign in, register a new application (any name).</li>
+        <li>Copy its <b style="color:var(--txt);">Client ID</b>/<b style="color:var(--txt);">Client Secret</b> into the fields above.</li>
+        <li>Add this exact <b style="color:var(--txt);">Redirect URI</b> in that app's settings: <span id="ctRedirectDisplay" style="color:var(--cyan); word-break:break-all;"></span></li>
+        <li>Tap <b style="color:var(--txt);">LOG IN WITH CTRADER</b> above and approve access.</li>
+        <li>Run the Termux command it gives you, paste the <b style="color:var(--txt);">accessToken</b> back into the field above, turn on Remember, tap CONNECT.</li>
+      </ol>
+    </div>
   </div>
 </div>
 
@@ -268,7 +267,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 
 <!-- MAIN DASHBOARD -->
 <div id="scrDash" class="screen">
-  <div class="conn-status"><span id="connBadge" class="badge off">OFFLINE</span></div>
+  <div class="conn-status"><span id="connBadge" class="badge off">OFFLINE</span><span id="btnRefresh" onclick="manualRefresh()" style="margin-left:8px; display:inline-block; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:4px 8px; font-size:14px; cursor:pointer;">&#8635;</span></div>
   <div class="dash-scroll">
     <div class="robot-hero">
       <div class="robot-img">
@@ -295,12 +294,14 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
     <div class="ctrl-bar">
       <div class="ctrl-pill" id="btnPause" onclick="togglePause()"><div class="icon">&#9208;</div><div class="lbl">PAUSE</div></div>
       <div class="ctrl-pill stop-active" id="btnStop" onclick="toggleStop()"><div class="icon">&#9632;</div><div class="lbl">STOP</div></div>
+      <div class="ctrl-pill" id="btnAuto" onclick="toggleAuto()"><div class="icon">&#9889;</div><div class="lbl">AUTO</div></div>
       <div class="ctrl-pill" id="btnInfo" onclick="showNewsModal()"><div class="icon">&#8505;</div><div class="lbl">INFO</div></div>
     </div>
 
     <div class="tradeport-label">Tradeport EA</div>
 
     <!-- CHART -->
+    <div style="display:flex; gap:6px; justify-content:center; margin:0 16px 8px;" id="chartTfRow"></div>
     <div class="chart-wrap">
       <div class="chart-loading" id="chartLoading">Loading chart...</div>
       <div id="tvChart"></div>
@@ -313,6 +314,8 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
       <div class="countdown" id="newsCountdown">--:--:--</div>
     </div>
 
+    <div id="sessionBadge" style="text-align:center; font-size:11px; color:var(--dim); letter-spacing:1px; margin:-4px 0 12px;">—</div>
+
     <!-- SIGNAL BANNER -->
     <div class="sig-banner">
       <div class="pair" id="sigPair">XAU/USD - Gold</div>
@@ -323,7 +326,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 
     <!-- STATS -->
     <div class="stat-row">
-      <div class="stat-box"><div class="lbl">Balance</div><div class="val" id="stBal">$0.00</div></div>
+      <div class="stat-box"><div class="lbl" id="stBalLbl">Balance</div><div class="val" id="stBal">$0.00</div></div>
       <div class="stat-box"><div class="lbl">Equity</div><div class="val" id="stEq">$0.00</div></div>
       <div class="stat-box"><div class="lbl">Today P&L</div><div class="val" id="stToday">$0.00</div></div>
     </div>
@@ -356,7 +359,12 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 <div id="scrSymbols" class="screen">
   <div class="screen-header"><div class="back" onclick="showScreen('dash')">&#8249;</div><h2>Allowed Symbols</h2></div>
   <div class="screen-body">
-    <p style="font-size:12px; color:var(--dim); margin-bottom:14px;">These are symbols you have selected for your EA to trade.</p>
+    <p style="font-size:12px; color:var(--dim); margin-bottom:10px;">These are symbols you have selected for your EA to trade.</p>
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <input id="symSearch" placeholder="e.g. EURJPY, ADAUSD..." style="flex:1;" onkeydown="if(event.key==='Enter')addCustomSymbol();">
+      <button style="background:var(--red); color:#fff; border:none; border-radius:10px; padding:0 18px; font-family:'Orbitron'; font-weight:700; font-size:12px; cursor:pointer;" onclick="addCustomSymbol()">ADD</button>
+    </div>
+    <p id="symSearchStatus" style="font-size:11px; color:var(--dim); margin:-8px 0 12px;"></p>
     <div id="symbolList"></div>
   </div>
 </div>
@@ -365,6 +373,17 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 <div id="scrConfig" class="screen">
   <div class="screen-header"><div class="back" onclick="showScreen('symbols')">&#8249;</div><h2 id="configTitle">XAUUSD</h2></div>
   <div class="screen-body config-form">
+    <label>Strategy</label>
+    <select id="cfgStrategy" onchange="applyStrategyPreset()">
+      <option value="confluence">Trend Confluence (default — trend/momentum/RSI/spread score)</option>
+      <option value="scalping">Scalping (M1, tight SL, fast cooldown)</option>
+      <option value="day">Day Trading (M15, moderate SL, hours-long hold)</option>
+      <option value="swing">Swing Trading (H1, wider SL, multi-day hold)</option>
+      <option value="position">Position Trading (H1, widest SL, week+ hold)</option>
+      <option value="emaRide">EMA Trend — Ride (EMA5/13/89, holds full trend, no fixed target)</option>
+      <option value="emaPullback">EMA Trend — Pullback (EMA5/13/89, 1:1.5 target, re-arms each pullback)</option>
+    </select>
+    <p id="strategyHint" style="color:var(--dim); font-size:11px; margin:4px 0 12px;"></p>
     <label>Lot Size</label>
     <input id="cfgLot" type="number" step="0.01" min="0.01" value="0.01">
     <div class="row2">
@@ -405,6 +424,9 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
       <div><b>Arm Live</b><small>Allow real orders</small></div>
       <div class="switch" id="swArm" onclick="toggleArm()"></div>
     </div>
+    <label style="margin-top:14px;">Account Environment</label>
+    <select id="cfgEnv" onchange="switchEnv(this.value)"><option value="demo">Demo account (paper money)</option><option value="live">Live account (real money)</option></select>
+    <p style="color:var(--dim); font-size:11px; margin-top:4px;">Switching this reconnects using the same saved credentials — no need to go back to the login page.</p>
     <div class="save-bar">
       <button class="btn-secondary" onclick="showScreen('symbols')">CANCEL</button>
       <button class="btn-primary" onclick="saveConfig()">SAVE</button>
@@ -428,13 +450,27 @@ const PT={APP_AUTH_REQ:2100,APP_AUTH_RES:2101,ACC_AUTH_REQ:2102,ACC_AUTH_RES:210
 
 // ========== SYMBOL DEFINITIONS ==========
 const SYM_DEFS={
-  XAUUSD:{key:'XAUUSD',ctMatch:['XAUUSD','XAU/USD','GOLD'],bn:'XAUUSDT',label:'XAU/USD',name:'Gold',digits:3,defSL:2.5,defTP:5,pip:0.01},
-  EURUSD:{key:'EURUSD',ctMatch:['EURUSD','EUR/USD'],bn:'EURUSDT',label:'EUR/USD',name:'Euro',digits:5,defSL:0.0015,defTP:0.003,pip:0.0001},
-  GBPUSD:{key:'GBPUSD',ctMatch:['GBPUSD','GBP/USD'],bn:'GBPUSDT',label:'GBP/USD',name:'Pound',digits:5,defSL:0.0018,defTP:0.0036,pip:0.0001},
-  USDJPY:{key:'USDJPY',ctMatch:['USDJPY','USD/JPY'],bn:'USDJPY',label:'USD/JPY',name:'Yen',digits:3,defSL:0.15,defTP:0.3,pip:0.01},
-  BTCUSDT:{key:'BTCUSDT',bn:'BTCUSDT',label:'BTC/USDT',name:'Bitcoin',digits:2,defSL:60,defTP:120,pip:1},
-  ETHUSDT:{key:'ETHUSDT',bn:'ETHUSDT',label:'ETH/USDT',name:'Ethereum',digits:2,defSL:5,defTP:10,pip:0.01}
+  XAUUSD:{key:'XAUUSD',ctMatch:['XAUUSD','XAU/USD','GOLD'],bn:'XAUUSDT',label:'XAU/USD',name:'Gold',digits:3,defSL:2.5,defTP:5,pip:0.01,weekend:false},
+  XAGUSD:{key:'XAGUSD',ctMatch:['XAGUSD','XAG/USD','SILVER'],bn:'',label:'XAG/USD',name:'Silver',digits:3,defSL:0.15,defTP:0.3,pip:0.001,weekend:false},
+  EURUSD:{key:'EURUSD',ctMatch:['EURUSD','EUR/USD'],bn:'EURUSDT',label:'EUR/USD',name:'Euro',digits:5,defSL:0.0015,defTP:0.003,pip:0.0001,weekend:false},
+  GBPUSD:{key:'GBPUSD',ctMatch:['GBPUSD','GBP/USD'],bn:'GBPUSDT',label:'GBP/USD',name:'Pound',digits:5,defSL:0.0018,defTP:0.0036,pip:0.0001,weekend:false},
+  USDJPY:{key:'USDJPY',ctMatch:['USDJPY','USD/JPY'],bn:'',label:'USD/JPY',name:'Yen',digits:3,defSL:0.15,defTP:0.3,pip:0.01,weekend:false},
+  USDCHF:{key:'USDCHF',ctMatch:['USDCHF','USD/CHF'],bn:'',label:'USD/CHF',name:'Swiss Franc',digits:5,defSL:0.0015,defTP:0.003,pip:0.0001,weekend:false},
+  USDCAD:{key:'USDCAD',ctMatch:['USDCAD','USD/CAD'],bn:'',label:'USD/CAD',name:'Loonie',digits:5,defSL:0.0018,defTP:0.0036,pip:0.0001,weekend:false},
+  AUDUSD:{key:'AUDUSD',ctMatch:['AUDUSD','AUD/USD'],bn:'',label:'AUD/USD',name:'Aussie',digits:5,defSL:0.0015,defTP:0.003,pip:0.0001,weekend:false},
+  NZDUSD:{key:'NZDUSD',ctMatch:['NZDUSD','NZD/USD'],bn:'',label:'NZD/USD',name:'Kiwi',digits:5,defSL:0.0015,defTP:0.003,pip:0.0001,weekend:false},
+  EURGBP:{key:'EURGBP',ctMatch:['EURGBP','EUR/GBP'],bn:'',label:'EUR/GBP',name:'Euro/Pound',digits:5,defSL:0.0012,defTP:0.0024,pip:0.0001,weekend:false},
+  EURJPY:{key:'EURJPY',ctMatch:['EURJPY','EUR/JPY'],bn:'',label:'EUR/JPY',name:'Euro/Yen',digits:3,defSL:0.18,defTP:0.36,pip:0.01,weekend:false},
+  GBPJPY:{key:'GBPJPY',ctMatch:['GBPJPY','GBP/JPY'],bn:'',label:'GBP/JPY',name:'Pound/Yen',digits:3,defSL:0.25,defTP:0.5,pip:0.01,weekend:false},
+  BTCUSDT:{key:'BTCUSDT',ctMatch:['BTCUSD','BTC/USD'],bn:'BTCUSDT',label:'BTC/USDT',name:'Bitcoin',digits:2,defSL:60,defTP:120,pip:1,weekend:true},
+  ETHUSDT:{key:'ETHUSDT',ctMatch:['ETHUSD','ETH/USD'],bn:'ETHUSDT',label:'ETH/USDT',name:'Ethereum',digits:2,defSL:5,defTP:10,pip:0.01,weekend:true},
+  LTCUSDT:{key:'LTCUSDT',ctMatch:['LTCUSD','LTC/USD'],bn:'LTCUSDT',label:'LTC/USDT',name:'Litecoin',digits:2,defSL:1,defTP:2,pip:0.01,weekend:true},
+  XRPUSDT:{key:'XRPUSDT',ctMatch:['XRPUSD','XRP/USD'],bn:'XRPUSDT',label:'XRP/USDT',name:'Ripple',digits:4,defSL:0.01,defTP:0.02,pip:0.0001,weekend:true},
+  SOLUSDT:{key:'SOLUSDT',ctMatch:['SOLUSD','SOL/USD'],bn:'SOLUSDT',label:'SOL/USDT',name:'Solana',digits:2,defSL:2,defTP:4,pip:0.01,weekend:true}
 };
+// weekend:true = trades 24/7 including Sat/Sun (crypto). Everything else here
+// is FX/metals, which close roughly Fri 22:00 UTC to Sun 22:00 UTC — see
+// isMarketOpenWeekend() below.
 
 // ========== STATE ==========
 let state={
@@ -450,12 +486,36 @@ let state={
 };
 
 let cfg={
+  strategy:'confluence',
   lotSize:0.01,posPerEntry:3,maxPositions:0,basketProfit:5,cooldownSec:60,
   tf:15,slDollars:15,trailBuffer:2,maxHoldMin:5,maxSpreadPct:0.5,
   autoReverse:true,profitProtect:true
 };
-
-let tvChart=null, candleSeries=null;
+// Presets just auto-fill the same fields every strategy already uses — you can
+// still edit any of them by hand afterward. EMA Ride/Pullback additionally
+// switch the whole signal engine (see computeEmaSignal); the other five all
+// run on the same trend/momentum/RSI/spread confluence engine, just tuned.
+const STRATEGY_PRESETS={
+  scalping:{tf:1,slDollars:8,basketProfit:5,cooldownSec:5,maxHoldMin:8,hint:'M1 entries, tight $8 stop, fast 5s re-entry, 8min max hold.'},
+  day:{tf:15,slDollars:15,basketProfit:20,cooldownSec:60,maxHoldMin:720,hint:'M15 entries, $15 stop, can hold up to 12 hours.'},
+  swing:{tf:60,slDollars:30,basketProfit:50,cooldownSec:600,maxHoldMin:4320,hint:'H1 entries, $30 stop, can hold up to 3 days.'},
+  position:{tf:60,slDollars:50,basketProfit:100,cooldownSec:3600,maxHoldMin:20160,hint:'H1 entries, $50 stop, can hold up to 14 days.'},
+  confluence:{hint:'Trend + momentum + RSI + spread, scored 0-100 — uses whatever Timeframe/SL/etc you set below.'},
+  emaRide:{hint:'Uses the Timeframe below for EMA5/13/89. No fixed take-profit — Basket Profit is ignored, it exits on a trend flip instead.'},
+  emaPullback:{slDollars:15,basketProfit:22.5,hint:'Uses the Timeframe below for EMA5/13/89. Basket Profit auto-set to 1.5x your SL (the "1:1.5" target) — edit either if you want a different ratio.'}
+};
+const STRATEGY_LABELS={confluence:'Trend Confluence',scalping:'Scalping',day:'Day Trading',swing:'Swing Trading',position:'Position Trading',emaRide:'EMA Trend — Ride',emaPullback:'EMA Trend — Pullback'};
+function applyStrategyPreset(){
+  const key=$('cfgStrategy').value;
+  const p=STRATEGY_PRESETS[key];
+  $('strategyHint').textContent=p.hint||'';
+  if(p.tf!=null)$('cfgTF').value=p.tf;
+  if(p.slDollars!=null)$('cfgSL').value=p.slDollars;
+  if(p.basketProfit!=null)$('cfgBasket').value=p.basketProfit;
+  if(p.cooldownSec!=null)$('cfgCool').value=p.cooldownSec;
+  if(p.maxHoldMin!=null)$('cfgHold').value=p.maxHoldMin;
+}
+let tvChart=null, candleSeries=null, emaLine1=null, emaLine2=null, emaLine3=null;
 
 // ========== HELPERS ==========
 const $=id=>document.getElementById(id);
@@ -559,6 +619,8 @@ async function checkOAuthCallback(){
 function loadConfigUI(){
   const def=SYM_DEFS[state.currentSymbol];
   $('configTitle').textContent=def?def.label:state.currentSymbol;
+  $('cfgStrategy').value=cfg.strategy;
+  $('strategyHint').textContent=(STRATEGY_PRESETS[cfg.strategy]||{}).hint||'';
   $('cfgLot').value=cfg.lotSize;
   $('cfgPosCount').value=cfg.posPerEntry;
   $('cfgMaxPos').value=cfg.maxPositions;
@@ -574,8 +636,30 @@ function loadConfigUI(){
   $('swNewsTrade').classList.toggle('on',state.newsTrading);
   $('swPaper').classList.toggle('on',state.paper);
   $('swArm').classList.toggle('on',state.armed);
+  const envSel=$('cfgEnv');if(envSel)envSel.value=state.env;
+}
+// In-app Demo/Live switch — reconnects with the same saved credentials,
+// no trip back to the login screen needed. Closes the current connection;
+// the existing onclose auto-reconnect logic in connectCT() picks the new
+// env up automatically since it always reads state.env fresh.
+function switchEnv(newEnv){
+  if(newEnv===state.env)return;
+  if(!confirm('Switch to '+(newEnv==='live'?'LIVE (real money)':'DEMO (paper money)')+' and reconnect?')){
+    $('cfgEnv').value=state.env;return;
+  }
+  state.env=newEnv;
+  if($('ctEnv'))$('ctEnv').value=newEnv;
+  if($('bnEnv'))$('bnEnv').value=newEnv;
+  saveCreds();
+  log('Switching to '+newEnv.toUpperCase()+'...');
+  if(state.broker==='ctrader'){
+    if(state.ws)state.ws.close(); else connectCT();
+  }else{
+    state.accountReady=false;connectBN();
+  }
 }
 function saveConfig(){
+  cfg.strategy=$('cfgStrategy').value;
   cfg.lotSize=parseFloat($('cfgLot').value)||0.01;
   cfg.posPerEntry=parseInt($('cfgPosCount').value)||1;
   cfg.maxPositions=parseInt($('cfgMaxPos').value)||0;
@@ -592,6 +676,8 @@ function saveConfig(){
   state.paper=$('swPaper').classList.contains('on');
   state.armed=$('swArm').classList.contains('on');
   saveCreds();
+  renderChartTfButtons();
+  if(candleSeries)redrawChart();
   showScreen('symbols');
   log('Config saved for '+state.currentSymbol);
 }
@@ -599,12 +685,22 @@ function updatePaper(){state.paper=$('swPaper').classList.contains('on');}
 function toggleArm(){if(!state.paper){$('swArm').classList.toggle('on');state.armed=$('swArm').classList.contains('on');saveCreds();return;}alert('Turn Paper Mode OFF first');}
 
 // ========== SYMBOL LIST ==========
+function isWeekendClosed(def){
+  if(def.weekend)return false; // crypto — always open
+  const now=new Date();const day=now.getUTCDay();const h=now.getUTCHours();
+  // FX/metals: closed roughly Sat 00:00 UTC through Sun 22:00 UTC (broker hours vary slightly)
+  if(day===6)return true;
+  if(day===0&&h<22)return true;
+  return false;
+}
 function renderSymbolList(){
   const list=$('symbolList');if(!list)return;list.innerHTML='';
   Object.keys(SYM_DEFS).forEach(key=>{
     const def=SYM_DEFS[key];const active=key===state.currentSymbol;
+    const closed=isWeekendClosed(def);
     const div=document.createElement('div');div.className='symbol-card'+(active?' check-on':'');
-    div.innerHTML='<div class="info"><div class="sym">'+def.label+'</div><div class="detail">'+def.name+' &bull; Lot '+cfg.lotSize+'</div></div><div class="check">'+(active?'&#10003;':'')+'</div>';
+    if(closed)div.style.opacity='0.5';
+    div.innerHTML='<div class="info"><div class="sym">'+def.label+(closed?' <span style="color:var(--gold); font-size:10px;">CLOSED (weekend)</span>':def.weekend?' <span style="color:var(--green); font-size:10px;">24/7</span>':'')+'</div><div class="detail">'+def.name+' &bull; Lot '+cfg.lotSize+'</div></div><div class="check">'+(active?'&#10003;':'')+'</div>';
     div.onclick=()=>{
       state.currentSymbol=key;initAsset();renderSymbolList();showScreen('config');loadConfigUI();
       // Actually subscribe/load data for the newly picked symbol (see fix note
@@ -613,10 +709,53 @@ function renderSymbolList(){
         if(state.broker==='ctrader')activateCtSymbol(key);
         else{const a=state.assets[key];if(a){a.bnSymbol=SYM_DEFS[key].bn;bnSubscribe(a);bnSeed(a);}}
       }
+      // FIX: activateCtSymbol()/bnSeed() only redraw the chart as a side effect
+      // of actually FETCHING data — if you'd already visited this symbol once
+      // this session, they skip re-fetching (correctly, to avoid spamming the
+      // broker) but that meant switching BACK to an already-loaded symbol left
+      // the chart showing whatever the previous symbol looked like. This
+      // covers every case directly: if bars are already there, show them now;
+      // if not, the fetch above will redraw once they arrive.
+      const a=state.assets[key];
+      if(candleSeries&&a&&a.bars1.length)redrawChart();
+      renderChartTfButtons();
     };
     list.appendChild(div);
   });
 }
+// Search/add any pair the broker actually offers — not just the built-in
+// list. cTrader: matches against the real symbol list already loaded from
+// SYMBOLS_LIST_RES (state.symbolsByNorm). Binance: accepts the typed symbol
+// directly (e.g. "SOLUSDT") since any valid Binance pair works as typed.
+function addCustomSymbol(){
+  const raw=$('symSearch').value.trim();
+  if(!raw){return;}
+  const status=$('symSearchStatus');
+  const cleanKey=raw.toUpperCase().replace(/[^A-Z]/g,'');
+  if(SYM_DEFS[cleanKey]){status.textContent=def_or(cleanKey)+' is already in your list.';status.style.color='var(--dim)';$('symSearch').value='';return;}
+  if(state.broker==='ctrader'){
+    if(!state.accountReady||!Object.keys(state.symbolsByNorm||{}).length){
+      status.textContent='Connect first — need the broker\'s symbol list to search.';status.style.color='var(--gold)';return;
+    }
+    const norm=s=>String(s).toUpperCase().replace(/[^A-Z]/g,'');
+    const target=norm(raw);
+    let hit=state.symbolsByNorm[target];
+    if(!hit){
+      // Try common separator variants (EUR/JPY, EURJPY, EUR-JPY etc all normalize the same way already)
+      hit=Object.values(state.symbolsByNorm).find(s=>norm(s.symbolName)===target);
+    }
+    if(!hit){status.textContent='No match for "'+raw+'" on this account. Check the exact symbol name your broker uses.';status.style.color='var(--red)';return;}
+    SYM_DEFS[cleanKey]={key:cleanKey,ctMatch:[hit.symbolName],bn:'',label:hit.symbolName,name:hit.symbolName,digits:5,defSL:15,defTP:20,pip:0.0001,weekend:false};
+    status.textContent='Added '+hit.symbolName+'.';status.style.color='var(--green)';
+    $('symSearch').value='';renderSymbolList();
+  }else{
+    const bnSym=cleanKey.endsWith('USDT')?cleanKey:cleanKey+'USDT';
+    SYM_DEFS[cleanKey]={key:cleanKey,ctMatch:[],bn:bnSym,label:bnSym.replace('USDT','/USDT'),name:bnSym,digits:2,defSL:10,defTP:20,pip:0.01,weekend:true};
+    status.textContent='Added '+bnSym+' — will confirm it\'s a real Binance pair once you select it (invalid symbols will just fail to stream).';status.style.color='var(--green)';
+    $('symSearch').value='';renderSymbolList();
+  }
+}
+function def_or(key){return SYM_DEFS[key]?SYM_DEFS[key].label:key;}
 
 // ========== CTRADER CONNECTION ==========
 function connectCT(){
@@ -663,10 +802,10 @@ function applyBNAccount(acct){if(!acct||acct.error)return;if(acct.balances){cons
 // ========== ASSET INIT ==========
 function initAsset(){
   const sym=state.currentSymbol;const def=SYM_DEFS[sym];if(!def)return;
-  if(!state.assets[sym])state.assets[sym]={key:sym,label:def.label,name:def.name,symbolId:null,full:null,lastPrice:0,bid:null,ask:null,bars1:[],bars5:[],bars15:[],bars30:[],currentBar:null,dataReady:false,positions:[],signal:'WAIT',score:0,streak:0,lastDir:'WAIT',lastTradeAt:0,lastCloseAt:0,floatingPnL:0,emaFast:null,emaSlow:null,emaTrend:null,rsi:null,atr:null,momentum:0};
+  if(!state.assets[sym])state.assets[sym]={key:sym,label:def.label,name:def.name,symbolId:null,full:null,lastPrice:0,bid:null,ask:null,bars1:[],bars5:[],bars15:[],bars30:[],bars60:[],currentBar:null,dataReady:false,positions:[],signal:'WAIT',score:0,streak:0,lastDir:'WAIT',lastTradeAt:0,lastCloseAt:0,floatingPnL:0,emaFast:null,emaSlow:null,emaTrend:null,rsi:null,atr:null,momentum:0};
   const a=state.assets[sym];a.bnSymbol=def.bn;
   setText('sigPair',def.label+' - '+def.name);
-  setText('robotMeta','Scalping &bull; '+def.label+' &bull; '+(state.auto?'Auto':'Manual'));
+  setText('robotMeta',STRATEGY_LABELS[cfg.strategy]+' &bull; '+def.label+' &bull; '+(state.auto?'Auto':'Manual'));
 }
 function initAssetBN(){initAsset();const a=state.assets[state.currentSymbol];if(a)a.bnSymbol=SYM_DEFS[state.currentSymbol].bn;bnSubscribe(a);bnSeed(a);}
 
@@ -726,21 +865,37 @@ function applyHistory(m,p){
   // was already on the chart. On a symbol switch that meant the new symbol's
   // candles got smeared on top of the previous symbol's instead of replacing
   // them. Only touch the chart if this history is actually for the symbol
-  // currently on screen, and use .setData() like bnSeed() correctly does.
-  if(candleSeries&&a.key===state.currentSymbol){
-    const data=a.bars1.map(b=>({time:b.t/1000,open:b.o,high:b.h,low:b.l,close:b.c}));
-    candleSeries.setData(data);
-    if(tvChart)tvChart.timeScale().fitContent();
-  }
+  // currently on screen, and go through redrawChart() so it also respects
+  // whatever timeframe/EMA overlay is currently selected.
+  if(candleSeries&&a.key===state.currentSymbol)redrawChart();
 }
 function buildHigher(a){
   const bucket=(mins,max)=>{const b={};a.bars1.forEach(x=>{const k=Math.floor(x.t/(mins*60000))*(mins*60000);const q=b[k]||{t:k,o:x.o,h:x.h,l:x.l,c:x.c};q.h=Math.max(q.h,x.h);q.l=Math.min(q.l,x.l);q.c=x.c;b[k]=q;});return Object.values(b).sort((x,y)=>x.t-y.t).slice(-max);};
-  a.bars5=bucket(5,400);a.bars15=bucket(15,300);a.bars30=bucket(30,200);
+  a.bars5=bucket(5,400);a.bars15=bucket(15,300);a.bars30=bucket(30,200);a.bars60=bucket(60,150);
+}
+// FIX: the Timeframe dropdown in Settings was stored (cfg.tf) but never
+// actually used anywhere — computeIndicators() always read bars15 no matter
+// what you picked, and H1 didn't even have a bar array built at all. Confirmed
+// bug. This is the single lookup every timeframe-aware function below now uses.
+function tfBars(a,tf){
+  return tf===1?a.bars1:tf===5?a.bars5:tf===15?a.bars15:tf===30?a.bars30:tf===60?a.bars60:a.bars15;
 }
 function applySymbol(sym){if(!sym)return;const a=Object.values(state.assets).find(x=>x.symbolId===sym.symbolId);if(a)a.full=sym;}
 function applyTrader(t){if(!t)return;state.moneyDigits=t.moneyDigits||2;state.balance=t.balance/Math.pow(10,state.moneyDigits);state.equity=t.equity/Math.pow(10,state.moneyDigits);if(state.startBalance==null)state.startBalance=state.balance;updateDash();}
 
 // ========== CHART ==========
+const CHART_TF_OPTIONS=[{m:1,l:'1m'},{m:5,l:'5m'},{m:15,l:'15m'},{m:30,l:'30m'},{m:60,l:'1H'}];
+function renderChartTfButtons(){
+  const row=$('chartTfRow');if(!row)return;
+  row.innerHTML='';
+  CHART_TF_OPTIONS.forEach(opt=>{
+    const b=document.createElement('button');
+    b.textContent=opt.l;
+    b.style.cssText='background:'+(cfg.tf===opt.m?'rgba(255,0,51,0.15)':'var(--panel)')+'; border:1px solid '+(cfg.tf===opt.m?'var(--red)':'var(--line)')+'; color:'+(cfg.tf===opt.m?'var(--red)':'var(--dim)')+'; border-radius:8px; padding:4px 10px; font-family:Orbitron; font-size:10px; font-weight:700; cursor:pointer;';
+    b.onclick=()=>{cfg.tf=opt.m;renderChartTfButtons();redrawChart();};
+    row.appendChild(b);
+  });
+}
 function initChart(){
   if(!document.getElementById('tvChart'))return;
   $('chartLoading').style.display='none';
@@ -750,13 +905,48 @@ function initChart(){
     crosshair:{mode:LightweightCharts.CrosshairMode.Normal},rightPriceScale:{borderColor:'#2a2a3a'},timeScale:{borderColor:'#2a2a3a',timeVisible:true,secondsVisible:false}
   });
   candleSeries=tvChart.addCandlestickSeries({upColor:'#00ff88',downColor:'#ff0033',borderUpColor:'#00ff88',borderDownColor:'#ff0033',wickUpColor:'#00ff88',wickDownColor:'#ff0033'});
-  const a=state.assets[state.currentSymbol];if(a&&a.bars1.length){const data=a.bars1.map(b=>({time:b.t/1000,open:b.o,high:b.h,low:b.l,close:b.c}));candleSeries.setData(data);tvChart.timeScale().fitContent();}
+  // Indicator overlay: EMA5/13/89 (green/cyan/gold) for the EMA Trend styles,
+  // EMA9/21 (cyan/gold) for everything else — same indicators the signal
+  // engine itself actually reads, not decorative placeholders.
+  emaLine1=tvChart.addLineSeries({color:'#00ff88',lineWidth:1,priceLineVisible:false,lastValueVisible:false});
+  emaLine2=tvChart.addLineSeries({color:'#00f0ff',lineWidth:1,priceLineVisible:false,lastValueVisible:false});
+  emaLine3=tvChart.addLineSeries({color:'#ffd700',lineWidth:2,priceLineVisible:false,lastValueVisible:false});
   window.addEventListener('resize',()=>{if(tvChart)tvChart.resize(chartEl.clientWidth,220);});
+  renderChartTfButtons();
+  redrawChart();
+}
+// Full rebuild: candles + EMA overlay for whatever timeframe (cfg.tf) and
+// strategy are currently active. Called on symbol switch, timeframe change,
+// strategy change, and whenever a new bar closes on the active timeframe.
+function redrawChart(){
+  if(!candleSeries)return;
+  const a=state.assets[state.currentSymbol];if(!a)return;
+  const bars=tfBars(a,cfg.tf);
+  if(!bars.length)return;
+  const data=bars.map(b=>({time:b.t/1000,open:b.o,high:b.h,low:b.l,close:b.c}));
+  candleSeries.setData(data);
+  const closes=bars.map(b=>b.c);
+  const times=bars.map(b=>b.t/1000);
+  const toLine=(seriesVals)=>seriesVals.map((v,i)=>v==null?null:{time:times[i],value:v}).filter(x=>x!==null);
+  if(cfg.strategy==='emaRide'||cfg.strategy==='emaPullback'){
+    emaLine1.setData(toLine(emaLineSeries(closes,5)));
+    emaLine2.setData(toLine(emaLineSeries(closes,13)));
+    emaLine3.setData(toLine(emaLineSeries(closes,89)));
+  }else{
+    emaLine1.setData(toLine(emaLineSeries(closes,9)));
+    emaLine2.setData(toLine(emaLineSeries(closes,21)));
+    emaLine3.setData([]);
+  }
+  tvChart.timeScale().fitContent();
 }
 function updateChart(a,price,now){
   if(!candleSeries||!a.currentBar||a.key!==state.currentSymbol)return; // don't let a background symbol's ticks bleed onto the visible chart
-  const t=a.currentBar.t/1000;
-  candleSeries.update({time:t,open:a.currentBar.o,high:a.currentBar.h,low:a.currentBar.l,close:a.currentBar.c});
+  if(cfg.tf===1){
+    const t=a.currentBar.t/1000;
+    candleSeries.update({time:t,open:a.currentBar.o,high:a.currentBar.h,low:a.currentBar.l,close:a.currentBar.c});
+  }
+  // Higher timeframes update on bar close (see updateBars' redrawChart() call)
+  // rather than every tick — the underlying bucket only actually changes then.
 }
 
 // ========== LIVE PRICE & BARS ==========
@@ -772,7 +962,7 @@ function onSpot(p){
 }
 function updateBars(a,price,now){
   const min=Math.floor(now/60000)*60000;
-  if(!a.currentBar||a.currentBar.t!==min){if(a.currentBar){a.bars1.push(a.currentBar);if(a.bars1.length>3000)a.bars1.shift();buildHigher(a);if(candleSeries)candleSeries.update({time:a.currentBar.t/1000,open:a.currentBar.o,high:a.currentBar.h,low:a.currentBar.l,close:a.currentBar.c});}a.currentBar={t:min,o:price,h:price,l:price,c:price};}
+  if(!a.currentBar||a.currentBar.t!==min){if(a.currentBar){a.bars1.push(a.currentBar);if(a.bars1.length>3000)a.bars1.shift();buildHigher(a);if(candleSeries&&a.key===state.currentSymbol)redrawChart();}a.currentBar={t:min,o:price,h:price,l:price,c:price};}
   else{a.currentBar.h=Math.max(a.currentBar.h,price);a.currentBar.l=Math.min(a.currentBar.l,price);a.currentBar.c=price;}
 }
 
@@ -791,7 +981,7 @@ function bnSubscribe(a){
   sock.onclose=()=>{setTimeout(()=>bnSubscribe(a),1200);};
   state.bnSockets[a.key]=sock;
 }
-async function bnSeed(a){try{const r=await bnCall('/api/binance/klines',{symbol:a.bnSymbol,interval:'1m',limit:1000});if(Array.isArray(r)){a.bars1=r.map(k=>({t:Number(k[0]),o:parseFloat(k[1]),h:parseFloat(k[2]),l:parseFloat(k[3]),c:parseFloat(k[4]),v:parseFloat(k[5]||0)}));buildHigher(a);a.dataReady=true;computeIndicators(a);if(candleSeries){const data=a.bars1.map(b=>({time:b.t/1000,open:b.o,high:b.h,low:b.l,close:b.c}));candleSeries.setData(data);tvChart.timeScale().fitContent();}log(a.label+' chart seeded');}}catch(e){log('Seed error: '+e.message);}}
+async function bnSeed(a){try{const r=await bnCall('/api/binance/klines',{symbol:a.bnSymbol,interval:'1m',limit:1000});if(Array.isArray(r)){a.bars1=r.map(k=>({t:Number(k[0]),o:parseFloat(k[1]),h:parseFloat(k[2]),l:parseFloat(k[3]),c:parseFloat(k[4]),v:parseFloat(k[5]||0)}));buildHigher(a);a.dataReady=true;computeIndicators(a);if(candleSeries&&a.key===state.currentSymbol)redrawChart();log(a.label+' chart seeded');}}catch(e){log('Seed error: '+e.message);}}
 
 // ========== NEWS ENGINE ==========
 function generateNewsCalendar(){
@@ -852,19 +1042,42 @@ function startNewsEngine(){generateNewsCalendar();setInterval(checkNews,1000);ch
 
 // ========== INDICATORS ==========
 function ema(v,p){if(v.length<p)return null;let e=v.slice(0,p).reduce((x,y)=>x+y,0)/p;const k=2/(p+1);for(let i=p;i<v.length;i++)e=v[i]*k+e*(1-k);return e;}
+// Full EMA series (one value per bar, not just the latest) — for plotting a
+// line on the chart, distinct from ema() above which only returns the most
+// recent value for signal computation.
+function emaLineSeries(v,p){
+  if(v.length<p)return [];
+  const out=new Array(v.length).fill(null);
+  let e=v.slice(0,p).reduce((x,y)=>x+y,0)/p;out[p-1]=e;
+  const k=2/(p+1);
+  for(let i=p;i<v.length;i++){e=v[i]*k+e*(1-k);out[i]=e;}
+  return out;
+}
 function rsi(v,p=14){if(v.length<=p)return null;let g=0,l=0;for(let i=1;i<=p;i++){const d=v[i]-v[i-1];if(d>0)g+=d;else l-=d;}let ag=g/p,al=l/p;for(let i=p+1;i<v.length;i++){const d=v[i]-v[i-1];ag=(ag*(p-1)+Math.max(d,0))/p;al=(al*(p-1)+Math.max(-d,0))/p;}return al===0?100:100-(100/(1+ag/al));}
 function atr(bars,p=14){if(bars.length<=p)return null;let tr=[];for(let i=1;i<bars.length;i++){const c=bars[i],pr=bars[i-1];tr.push(Math.max(c.h-c.l,Math.abs(c.h-pr.c),Math.abs(c.l-pr.c)));}let a=tr.slice(0,p).reduce((x,y)=>x+y,0)/p;for(let i=p;i<tr.length;i++)a=(a*(p-1)+tr[i])/p;return a;}
 
 function computeIndicators(a){
-  const c1=a.bars1.map(x=>x.c);const c15=a.bars15.map(x=>x.c);
-  a.emaFast=ema(c1,9);a.emaSlow=ema(c1,21);a.emaTrend=ema(c15,9);a.rsi=rsi(c1,14);a.atr=atr(a.bars1,14);
+  const c1=a.bars1.map(x=>x.c);
+  const higherBars=tfBars(a,cfg.tf);
+  const cH=higherBars.map(x=>x.c);
+  a.emaFast=ema(c1,9);a.emaSlow=ema(c1,21);a.emaTrend=ema(cH,9);a.rsi=rsi(c1,14);a.atr=atr(a.bars1,14);
   const back=c1[Math.max(0,c1.length-4)];a.momentum=back?((c1[c1.length-1]-back)/back)*100:0;
-  a.dataReady=c1.length>=50&&c15.length>=20;
+  a.dataReady=c1.length>=50&&cH.length>=20;
 }
 
+// Dispatches to whichever engine cfg.strategy picked. "confluence" (and its
+// Scalping/Day/Swing/Position presets, which just auto-fill different
+// tf/SL/basket/cooldown values into this same engine) all use the trend+
+// momentum+RSI+spread scoring below. The two EMA Trend styles use a
+// completely different, purpose-built engine (see computeEmaSignal).
 function computeSignal(a){
+  if(cfg.strategy==='emaRide'||cfg.strategy==='emaPullback'){computeEmaSignal(a);return;}
+  computeConfluenceSignal(a);
+}
+function computeConfluenceSignal(a){
   if(!a.dataReady||!a.lastPrice){a.signal='WAIT';a.score=0;return;}
-  const trend=a.emaTrend&&a.bars15.length?a.lastPrice>a.emaTrend?'BUY':'SELL':'WAIT';
+  const higherLen=tfBars(a,cfg.tf).length;
+  const trend=a.emaTrend&&higherLen?a.lastPrice>a.emaTrend?'BUY':'SELL':'WAIT';
   const setup=a.emaFast&&a.emaSlow?(a.emaFast>a.emaSlow?'BUY':a.emaFast<a.emaSlow?'SELL':'WAIT'):'WAIT';
   const momDir=a.momentum>0.004?'BUY':a.momentum<-0.004?'SELL':'WAIT';
   const rsiOk=a.rsi!=null?!(trend==='BUY'&&a.rsi>75)&&!(trend==='SELL'&&a.rsi<25):true;
@@ -873,6 +1086,48 @@ function computeSignal(a){
   if(trend!=='WAIT'&&trend===setup){score=40;dir=trend;if(momDir===dir)score+=20;if(rsiOk)score+=15;if(spreadOk)score+=15;if(Math.abs(a.momentum)>0.008)score+=10;}
   a.signal=dir;a.score=Math.min(100,score);
   if(dir!=='WAIT'&&a.lastDir===dir)a.streak++;else{a.lastDir=dir;a.streak=1;}
+}
+
+// EMA 5/13/89 strategy, ported from our tested build. EMA5 = fastest reaction,
+// EMA13 = confirmation (5-crosses-back-over-13 is the entry trigger), EMA89 =
+// trend filter (both 5 and 13 must be on the same side of it). A pullback is
+// EMA5/EMA13 coming close together or briefly crossing to the opposite side —
+// NOT price touching EMA89. Uses whatever timeframe is picked in Settings
+// (cfg.tf), same as every other strategy here.
+function computeEmaSignal(a){
+  const bars=tfBars(a,cfg.tf);
+  const closes=bars.map(x=>x.c);
+  if(closes.length<95){a.signal='WAIT';a.score=0;a.emaWarmup=closes.length+'/95 bars';return;}
+  const e5=ema(closes,5),e13=ema(closes,13),e89=ema(closes,89);
+  const e5p=ema(closes.slice(0,-1),5),e13p=ema(closes.slice(0,-1),13);
+  if(e5==null||e13==null||e89==null||e5p==null||e13p==null){a.signal='WAIT';a.score=0;return;}
+  a.ema5=e5;a.ema13=e13;a.ema89=e89;
+  let trend='WAIT';
+  if(e5>e89&&e13>e89)trend='BUY';else if(e5<e89&&e13<e89)trend='SELL';
+  a.emaState=a.emaState||{trend:'WAIT',pullback:false};
+  const st=a.emaState;
+  if(trend!==st.trend){st.trend=trend;st.pullback=false;}
+  const gap=Math.abs(e5-e13);
+  const closeEnough=gap<=closes[closes.length-1]*0.0006;
+  const oppositeCross=trend==='BUY'?(e5<=e13):trend==='SELL'?(e5>=e13):false;
+  if(trend!=='WAIT'&&(closeEnough||oppositeCross))st.pullback=true;
+  const bar=bars[bars.length-1];const range=bar.h-bar.l;
+  const bodyOk=range>0&&(trend==='BUY'?(bar.c>bar.o&&(bar.c-bar.o)>=range*0.4):trend==='SELL'?(bar.c<bar.o&&(bar.o-bar.c)>=range*0.4):false);
+  const crossBack=trend==='BUY'?(e5p<=e13p&&e5>e13):trend==='SELL'?(e5p>=e13p&&e5<e13):false;
+  const entryOK=trend!=='WAIT'&&st.pullback&&crossBack&&bodyOk;
+  a.dataReady=true;
+  a.signal=entryOK?trend:'WAIT';a.score=entryOK?100:0;
+  a.streak=entryOK?2:0; // EMA entries are event-triggered (fresh cross), not accumulated over ticks like the confluence engine — satisfy maybeTrade's streak>=2 gate directly
+  if(entryOK)st.pullback=false; // consumed — wait for the next pullback before firing again
+}
+// Ride mode has no fixed profit target — it holds until EMA5+EMA13 break
+// cleanly back through EMA89 (the trend it was riding is gone). Called from
+// checkExits() instead of the basket-profit check for that one style.
+function checkEmaTrendFlipExit(a){
+  if(cfg.strategy!=='emaRide'||!a.positions.length)return;
+  const pos=a.positions[0];
+  const trendNow=a.emaState?a.emaState.trend:'WAIT';
+  if(trendNow!==pos.side){log('EMA trend flip — closing ride position on '+a.label+'.');closeAllPositions(a);}
 }
 
 // ========== TRADING LOGIC ==========
@@ -978,8 +1233,11 @@ function updatePositions(a){
 function checkExits(a){
   if(!a.positions.length)return;
   const now=Date.now();
-  // Basket profit target
-  if(a.floatingPnL>=cfg.basketProfit){log('Basket profit: '+fmtPnL(a.floatingPnL));closeAllPositions(a);return;}
+  // Ride mode has no fixed profit target — see checkEmaTrendFlipExit — so skip
+  // the basket-profit close for that one style only.
+  if(cfg.strategy!=='emaRide'&&a.floatingPnL>=cfg.basketProfit){log('Basket profit: '+fmtPnL(a.floatingPnL));closeAllPositions(a);return;}
+  checkEmaTrendFlipExit(a);
+  if(!a.positions.length)return; // may have just been closed by the trend-flip check above
   // Max hold time
   const oldest=Math.min(...a.positions.map(p=>p.openedAt));
   if(now-oldest>cfg.maxHoldMin*60000){log('Max hold reached');closeAllPositions(a);return;}
@@ -1078,6 +1336,16 @@ function toggleStop(){
   $('btnStop').classList.toggle('stop-active',state.stopped);
   if(state.stopped){closeAll();log('STOPPED - All closed');}else{log('RESTARTED');}
 }
+// Manual refresh: this app fixes body to 100vh with overflow hidden so its
+// screen-switching shell works at all (fixed headers, only inner content
+// scrolls) — but that also means the browser never sees a page-level
+// overscroll, so native pull-to-refresh can't fire. This button is the
+// substitute: a full reload, which re-connects cleanly and pulls saved
+// credentials back in automatically if "Remember" was on.
+function manualRefresh(){
+  log('Refreshing...');
+  location.reload();
+}
 function toggleAuto(){
   state.auto=!state.auto;
   $('btnAuto').classList.toggle('active',state.auto);
@@ -1085,18 +1353,27 @@ function toggleAuto(){
 }
 
 // ========== DASHBOARD UPDATE ==========
+const SESSIONS=[{name:'Sydney',start:21,end:6},{name:'Tokyo',start:0,end:9},{name:'London',start:7,end:16},{name:'New York',start:12,end:21}];
+function renderSessionBadge(){
+  const el=$('sessionBadge');if(!el)return;
+  const h=new Date().getUTCHours();
+  const live=SESSIONS.filter(s=>s.start<s.end?(h>=s.start&&h<s.end):(h>=s.start||h<s.end)).map(s=>s.name);
+  el.textContent=live.length?('Session: '+live.join(' + ')+' open'):'Session: between major sessions (low liquidity)';
+}
 function updateDash(){
   resetDaily();
+  renderSessionBadge();
   const a=state.assets[state.currentSymbol];if(!a)return;
   const totalPnL=a.floatingPnL+(state.paper?0:state.todayPnl);
   const el=$('dashPnl');if(el){el.textContent=fmtPnL(totalPnL);el.className='pnl-big '+(totalPnL>=0?'pos':'neg');}
   setText('stBal',fmt$(state.paper?state.paperBalance:state.balance));
+  setText('stBalLbl',state.paper?'Balance (Paper)':'Balance ('+(state.env==='live'?'Live':'Demo')+')');
   setText('stEq',fmt$(state.equity));
   setText('stToday',fmtPnL(state.todayPnl));
   setText('sigPrice',a.lastPrice?a.lastPrice.toFixed(a.full?a.full.digits:5):'-');
   const sig=$('sigText');if(sig){sig.textContent=a.signal;sig.className='sig '+a.signal;}
   setText('sigScore','Signal strength: '+a.score+'% | Streak: '+a.streak);
-  setText('robotMeta','Scalping &bull; '+a.label+' &bull; '+(state.auto?'Auto':'Manual')+(state.newsBlackout?' &bull; NEWS BLACKOUT':'')+(state.newsMode?' &bull; NEWS MODE':''));
+  setText('robotMeta',STRATEGY_LABELS[cfg.strategy]+' &bull; '+a.label+' &bull; '+(state.auto?'Auto':'Manual')+(state.newsBlackout?' &bull; NEWS BLACKOUT':'')+(state.newsMode?' &bull; NEWS MODE':''));
 }
 
 // ========== INIT ==========
