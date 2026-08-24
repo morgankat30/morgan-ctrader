@@ -533,25 +533,23 @@ const STRATEGY_PRESETS={
   day:{tf:15,slDollars:15,basketProfit:20,cooldownSec:60,maxHoldMin:720,hint:'M15 entries, $15 stop, can hold up to 12 hours.'},
   swing:{tf:60,slDollars:30,basketProfit:50,cooldownSec:600,maxHoldMin:4320,hint:'H1 entries, $30 stop, can hold up to 3 days.'},
   position:{tf:60,slDollars:50,basketProfit:100,cooldownSec:3600,maxHoldMin:20160,hint:'H1 entries, $50 stop, can hold up to 14 days.'},
-  // Clone of Scalping's tf/SL, but its own exit logic entirely: no basket
-  // take-profit — it lets a winning position run as long as the market keeps
-  // giving, and only closes the instant it gives back $0.20 from its best
-  // point (see checkFlipGiveback). On close it ALWAYS re-enters the opposite
-  // side immediately, regardless of what the signal engine currently reads —
-  // that's the "flip" (see maybeTrade/paperClose/onExec's flip branches).
-  // maxHoldMin is a generous 24h safety cap, not a real target — this
-  // strategy is meant to keep a position open indefinitely while it's
-  // working.
-  flip:{tf:1,slDollars:8,basketProfit:0,cooldownSec:2,maxHoldMin:1440,hint:'M1, $8 stop. Always alternates BUY/SELL on close. Ignores the take-profit while winning — only closes when a position gives back $0.20 from its peak profit, then immediately flips direction.'},
+  // Clone of Scalping's tf/SL, still always re-entering the OPPOSITE side on
+  // every close (see maybeTrade/paperClose/onExec's flip branches) — that
+  // part is unchanged and is the actual "flip." The exit logic itself is NOT
+  // its own special case anymore — see the FIX note above checkTrail
+  // for why: an $8 stop-loss against an uncapped, un-scaled $0.20
+  // giveback-from-peak meant most "wins" were tiny fractions of a dollar
+  // while losses ran the full $8, which is a structurally losing setup no
+  // matter how often it wins. Flip now uses the exact same take-profit +
+  // proportional profit-lock trailing as every other strategy — same
+  // mechanism, same code path, just with the distinctive always-flip-
+  // direction-on-close behavior layered on top.
+  flip:{tf:1,slDollars:8,basketProfit:10,cooldownSec:2,maxHoldMin:1440,hint:'M1, $8 stop, $10 take-profit (edit either — roughly 1:1.25). Profit Protection trails and locks in gains the same way it does for every other strategy. Always alternates BUY/SELL on close.'},
   confluence:{hint:'Trend + momentum + RSI + spread, scored 0-100 — uses whatever Timeframe/SL/etc you set below.'},
   emaRide:{hint:'Uses the Timeframe below for EMA5/13/89. No fixed take-profit — Basket Profit is ignored, it exits on a trend flip instead.'},
   emaPullback:{slDollars:15,basketProfit:22.5,hint:'Uses the Timeframe below for EMA5/13/89. Basket Profit auto-set to 1.5x your SL (the "1:1.5" target) — edit either if you want a different ratio.'}
 };
 const STRATEGY_LABELS={confluence:'Trend Confluence',scalping:'Scalping',day:'Day Trading',swing:'Swing Trading',position:'Position Trading',flip:'Flip',emaRide:'EMA Trend — Ride',emaPullback:'EMA Trend — Pullback'};
-// Fixed by design, not user-configurable — this dollar figure is what makes
-// Flip behave the way it was asked to: ride a winner indefinitely, but never
-// let it hand back more than this much from its best point.
-const FLIP_GIVEBACK=0.20;
 function applyStrategyPreset(){
   const key=$('cfgStrategy').value;
   const p=STRATEGY_PRESETS[key];
@@ -1417,7 +1415,7 @@ function maybeTrade(a){
     if(!a.dataReady||a.positions.length||a.flipStarted)return;
     const now=Date.now();
     if(a.lastTradeAt&&now-a.lastTradeAt<cfg.cooldownSec*1000)return;
-    a.flipStarted=true;a.flipPeakPnL=0;
+    a.flipStarted=true;
     executeTrade(a,a.signal!=='WAIT'?a.signal:'BUY');
     return;
   }
@@ -1441,9 +1439,13 @@ function maybeTrade(a){
 // grows as the trade proves itself.
 function executeTrade(a,side){
   const now=Date.now();a.lastTradeAt=now;
-  if(cfg.strategy==='flip')a.flipPeakPnL=0; // fresh cycle position — reset the peak-giveback tracker
-  if(state.paper)paperOpen(a,side);else realOpen(a,side);
-  log(side+' 1/'+cfg.posPerEntry+' '+cfg.lotSize+' on '+a.label+(cfg.posPerEntry>1?' (adds more as it proves itself, +0.5R per leg)':''));
+  // FIX: this used to log "SELL 1/3 0.01 on XAU/USD" unconditionally, even
+  // when paperOpen()/realOpen() had just refused the trade (e.g. LIVE NOT
+  // ARMED, symbol still loading, sanity-check block) — every rejection
+  // looked exactly like a successful fill in the log, with the real reason
+  // buried in a separate line above/below it. Only log success as success.
+  const ok=state.paper?paperOpen(a,side):realOpen(a,side);
+  if(ok)log(side+' 1/'+cfg.posPerEntry+' '+cfg.lotSize+' on '+a.label+(cfg.posPerEntry>1?' (adds more as it proves itself, +0.5R per leg)':''));
   updateDash();
 }
 function maybeAddStackLeg(a){
@@ -1453,8 +1455,8 @@ function maybeAddStackLeg(a){
   const dir=last.side==='BUY'?1:-1;
   const profitDist=(a.lastPrice-last.entryPrice)*dir;
   if(profitDist<last.initialRisk*0.5)return;
-  if(state.paper)paperOpen(a,last.side);else realOpen(a,last.side);
-  log('Stack leg '+a.positions.length+'/'+cfg.posPerEntry+' added on '+a.label+' (prior leg reached +0.5R).');
+  const ok=state.paper?paperOpen(a,last.side):realOpen(a,last.side);
+  if(ok)log('Stack leg '+a.positions.length+'/'+cfg.posPerEntry+' added on '+a.label+' (prior leg reached +0.5R).');
   updateDash();
 }
 
@@ -1490,23 +1492,31 @@ function paperOpen(a,side){
   // silently corrupted position.
   if(state.broker==='ctrader'&&!isFullLoaded(a)){
     log('Cannot trade '+a.label+' yet — still loading this symbol\'s lot-size info from the broker. Try again in a moment.');
-    return;
+    return false;
   }
   const entry=a.lastPrice;
   const vol=volumeFor(a,cfg.lotSize);
   if(!Number.isFinite(vol)||vol<=0){
     log('Cannot trade '+a.label+': lot size not ready yet (volume calc came back '+vol+'). Try again in a moment.');
-    return;
+    return false;
   }
   const slDist=cfg.slDollars/dollarPerUnitFor(vol);
   const problem=sanityCheckTrade(a,vol,slDist);
-  if(problem){log('Blocked '+a.label+' trade: '+problem+'.');return;}
+  if(problem){log('Blocked '+a.label+' trade: '+problem+'.');return false;}
   const sl=side==='BUY'?entry-slDist:entry+slDist;
   a.positions.push({side,entryPrice:entry,volume:vol,stopLoss:sl,takeProfit:null,openedAt:Date.now(),paper:true,peakPnL:0,trailingActive:false,initialRisk:slDist});
+  return true;
 }
 
 function realOpen(a,side){
-  if(!state.armed){log('LIVE NOT ARMED');return;}
+  // FIX ("not working on my real account and demo"): this required Arm Live
+  // to be on unconditionally — including for a DEMO cTrader account, where
+  // there's no real money at risk at all. Arm Live exists to gate genuine
+  // real-money risk; gating demo behind it too meant every demo order was
+  // silently refused unless you happened to flip on a toggle that reads
+  // like it's specifically about live money. Now only actually-live trading
+  // requires it.
+  if(state.env==='live'&&!state.armed){log('Blocked: LIVE account and Arm Live is off — turn on Arm Live in Config to allow real-money orders.');return false;}
   if(state.broker==='ctrader'){
     const symId=a.symbolId;
     // FIX: this is what produced "INVALID_REQUEST — missing required fields:
@@ -1516,9 +1526,9 @@ function realOpen(a,side){
     // symbol switch, before SYMBOL_BY_ID_RES arrives. Sending that broken
     // number serializes to JSON null, which the broker reports as a missing
     // field. Catch it here, locally, with a clear reason instead.
-    if(!symId){log('Cannot trade '+a.label+' yet — still loading this symbol from the broker. Try again in a moment.');return;}
+    if(!symId){log('Cannot trade '+a.label+' yet — still loading this symbol from the broker. Try again in a moment.');return false;}
     const vol=volumeFor(a,cfg.lotSize);
-    if(!Number.isFinite(vol)||vol<=0){log('Cannot trade '+a.label+': lot size not ready yet (volume calc came back '+vol+'). Try again in a moment.');return;}
+    if(!Number.isFinite(vol)||vol<=0){log('Cannot trade '+a.label+': lot size not ready yet (volume calc came back '+vol+'). Try again in a moment.');return false;}
     // FIX: NEW_ORDER_REQ takes relativeStopLoss (relative distance, fixed
     // 1/100000-of-price-unit scale per cTrader's own API spec — confirmed by
     // checking their proto docs directly), not an absolute "stopLoss" price
@@ -1530,11 +1540,13 @@ function realOpen(a,side){
     // why this is validated against your own stated intent (cfg.slDollars)
     // rather than trusting the broker's raw fields blindly.
     const problem=sanityCheckTrade(a,vol,slDist);
-    if(problem){log('Blocked '+a.label+' REAL order: '+problem+'.');return;}
+    if(problem){log('Blocked '+a.label+' REAL order: '+problem+'.');return false;}
     const relSL=Math.round(slDist*100000);
     send(PT.NEW_ORDER_REQ,{ctidTraderAccountId:state.accountId,symbolId:symId,orderType:1,tradeSide:side==='BUY'?1:2,volume:vol,relativeStopLoss:relSL,label:'SXU'});
+    return true;
   }else{
     bnCall('/api/binance/order',{symbol:a.bnSymbol,side:side==='BUY'?'BUY':'SELL',type:'MARKET',quantity:cfg.lotSize.toString()});
+    return true;
   }
 }
 
@@ -1590,38 +1602,34 @@ function updatePositions(a){
     if(pnl>p.peakPnL)p.peakPnL=pnl;
   });
   a.floatingPnL=total;
-  // Flip tracks its peak at the whole-basket level (matching how basketProfit
-  // itself works elsewhere) since Positions Per Entry can still stack extra
-  // legs onto a Flip position as it proves itself.
-  if(cfg.strategy==='flip'){if(total>(a.flipPeakPnL||0))a.flipPeakPnL=total;}
 }
 
-// Flip's exit rule: while a position is winning, ignore any fixed
-// take-profit and let it run — only step in once it's given back $0.20 from
-// the best floating profit it reached. A fresh trade dipping slightly
-// negative right out of the gate isn't "giving back" anything (that's just
-// normal noise before it's proven itself), so this only arms once real
-// profit has actually built up.
-function checkFlipGiveback(a){
-  if(cfg.strategy!=='flip'||!a.positions.length)return;
-  const peak=a.flipPeakPnL||0;
-  if(peak<=0)return;
-  const giveback=peak-a.floatingPnL;
-  if(giveback>=FLIP_GIVEBACK){
-    log('Flip: gave back $'+giveback.toFixed(2)+' from peak +'+fmtPnL(peak)+' — closing '+a.label+' ('+fmtPnL(a.floatingPnL)+').');
-    closeAllPositions(a);
-  }
-}
+// FIX ("respect my TP and SL... never let it pull all the way back... close
+// fast with profit, but balance kept going down anyway"): Flip's exit used
+// to be its own special case — no take-profit at all, and profit protection
+// was a flat $0.20 giveback-from-peak with no floor and no scaling. Against
+// an $8 stop-loss, that's structurally lopsided: most winning closes were
+// tiny (exiting the instant a small peak gave back just 20 cents), while a
+// losing close ran the full $8 — many small wins can't outpace occasional
+// full-size losses at that ratio, which is exactly "closing with profit but
+// the balance kept going down." Flip no longer has a separate exit
+// mechanism: it now takes profit at cfg.basketProfit like every other
+// strategy (checkExits below) and uses the same proportional profit-lock
+// ratchet in checkTrail (locks ~90% of peak profit above a small cushion,
+// only ever tightening) instead of a fixed 20-cent trigger — a $3 peak
+// protects meaningfully more than a $0.30 peak did before, in proportion,
+// rather than both being cut off at the same 20 cents. The always-flip-
+// direction-on-close behavior in paperClose/onExec is unchanged.
 
 function checkExits(a){
   if(!a.positions.length)return;
   const now=Date.now();
   // Ride mode has no fixed profit target — see checkEmaTrendFlipExit — so skip
-  // the basket-profit close for that one style. Flip also skips it: its exit
-  // is the peak-giveback check below instead (see checkFlipGiveback).
-  if(cfg.strategy!=='emaRide'&&cfg.strategy!=='flip'&&a.floatingPnL>=cfg.basketProfit){log('Basket profit: '+fmtPnL(a.floatingPnL));closeAllPositions(a);return;}
+  // the basket-profit close for that one style only. Flip now uses this same
+  // basket-profit take-profit like everything else — see the FIX note above
+  // checkTrail for why its old separate exit mechanism was removed.
+  if(cfg.strategy!=='emaRide'&&a.floatingPnL>=cfg.basketProfit){log('Basket profit: '+fmtPnL(a.floatingPnL));closeAllPositions(a);return;}
   checkEmaTrendFlipExit(a);
-  checkFlipGiveback(a);
   if(!a.positions.length)return; // may have just been closed by one of the checks above
   // Max hold time
   const oldest=Math.min(...a.positions.map(p=>p.openedAt));
