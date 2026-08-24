@@ -922,7 +922,13 @@ function handleCT(m){
     case PT.GET_TRENDBARS_RES:applyHistory(m,p);break;
     case PT.SPOT_EVENT:onSpot(p);break;
     case PT.EXECUTION_EVENT:onExec(p);break;
-    case PT.ORDER_ERROR_EVENT:log('ORDER ERROR: '+p.errorCode+(p.description?(' — '+p.description):''));break;
+    case PT.ORDER_ERROR_EVENT:
+      log('ORDER ERROR: '+p.errorCode+(p.description?(' — '+p.description):''));
+      // No symbolId on this event to know which asset it belongs to, so
+      // release every asset's in-flight lock rather than leave a real
+      // rejection stuck blocking re-entry for up to 8s for no reason.
+      Object.values(state.assets).forEach(x=>{x.orderPending=false;});
+      break;
     case PT.ERROR_RES:{
       hideLoading();state.connecting=false;
       const code=p.errorCode||'';
@@ -963,7 +969,7 @@ function applyBNAccount(acct){if(!acct||acct.error)return;if(acct.balances){cons
 // ========== ASSET INIT ==========
 function initAsset(){
   const sym=state.currentSymbol;const def=SYM_DEFS[sym];if(!def)return;
-  if(!state.assets[sym])state.assets[sym]={key:sym,label:def.label,name:def.name,symbolId:null,full:null,lastPrice:0,bid:null,ask:null,bars1:[],bars5:[],bars15:[],bars30:[],bars60:[],currentBar:null,dataReady:false,positions:[],signal:'WAIT',score:0,streak:0,lastDir:'WAIT',lastTradeAt:0,lastCloseAt:0,floatingPnL:0,emaFast:null,emaSlow:null,emaTrend:null,rsi:null,atr:null,momentum:0};
+  if(!state.assets[sym])state.assets[sym]={key:sym,label:def.label,name:def.name,symbolId:null,full:null,lastPrice:0,bid:null,ask:null,bars1:[],bars5:[],bars15:[],bars30:[],bars60:[],currentBar:null,dataReady:false,positions:[],signal:'WAIT',score:0,streak:0,lastDir:'WAIT',lastTradeAt:0,lastCloseAt:0,floatingPnL:0,emaFast:null,emaSlow:null,emaTrend:null,rsi:null,atr:null,momentum:0,orderPending:false,orderPendingAt:0};
   const a=state.assets[sym];a.bnSymbol=def.bn;
   setText('sigPair',def.label+' - '+def.name);
   setText('robotMeta',STRATEGY_LABELS[cfg.strategy]+' &bull; '+def.label+' &bull; '+(state.auto?'Auto':'Manual'));
@@ -1438,13 +1444,29 @@ function maybeTrade(a){
 // one is already +0.5R in profit, up to the configured count — so risk only
 // grows as the trade proves itself.
 function executeTrade(a,side){
+  // FIX (the cause of the 10-identical-positions pile-up on the broker):
+  // a real order is confirmed asynchronously — NEW_ORDER_REQ is sent, then
+  // some time later (a full network round trip) EXECUTION_EVENT arrives and
+  // ORDER_FILLED pushes it into a.positions. Nothing here used to account
+  // for that gap. maybeTrade() only skips re-entering once a.positions is
+  // non-empty, so on a fast cooldown (Scalping is 5s) it kept calling
+  // executeTrade() again every cooldown tick for as long as the confirmation
+  // hadn't landed yet, firing a fresh real order each time — which is
+  // exactly how 10 separate 0.01-lot BUYs ended up open on the broker at
+  // once while the bot's own state still showed zero positions. This adds
+  // a simple in-flight lock: once a real order is sent, block further real
+  // entries on this asset until either the fill confirms (cleared in onExec)
+  // or 8s pass with no response (self-heals if an event is ever dropped).
+  if(!state.paper&&a.orderPending&&Date.now()-a.orderPendingAt<8000)return;
   const now=Date.now();a.lastTradeAt=now;
   // FIX: this used to log "SELL 1/3 0.01 on XAU/USD" unconditionally, even
   // when paperOpen()/realOpen() had just refused the trade (e.g. LIVE NOT
   // ARMED, symbol still loading, sanity-check block) — every rejection
   // looked exactly like a successful fill in the log, with the real reason
   // buried in a separate line above/below it. Only log success as success.
+  if(!state.paper){a.orderPending=true;a.orderPendingAt=now;}
   const ok=state.paper?paperOpen(a,side):realOpen(a,side);
+  if(!state.paper&&!ok){a.orderPending=false;} // local rejection (not-loaded/sanity-check) — no event will ever arrive to clear it
   if(ok)log(side+' 1/'+cfg.posPerEntry+' '+cfg.lotSize+' on '+a.label+(cfg.posPerEntry>1?' (adds more as it proves itself, +0.5R per leg)':''));
   updateDash();
 }
@@ -1455,7 +1477,10 @@ function maybeAddStackLeg(a){
   const dir=last.side==='BUY'?1:-1;
   const profitDist=(a.lastPrice-last.entryPrice)*dir;
   if(profitDist<last.initialRisk*0.5)return;
+  if(!state.paper&&a.orderPending&&Date.now()-a.orderPendingAt<8000)return; // same in-flight lock as executeTrade()
+  if(!state.paper){a.orderPending=true;a.orderPendingAt=Date.now();}
   const ok=state.paper?paperOpen(a,last.side):realOpen(a,last.side);
+  if(!state.paper&&!ok){a.orderPending=false;}
   if(ok)log('Stack leg '+a.positions.length+'/'+cfg.posPerEntry+' added on '+a.label+' (prior leg reached +0.5R).');
   updateDash();
 }
@@ -1716,6 +1741,7 @@ function onExec(p){
     if(pos&&pos.tradeData){
       const a=Object.values(state.assets).find(x=>x.symbolId===pos.tradeData.symbolId);
       if(a&&pos.positionId&&pos.tradeData.volume>0){
+        a.orderPending=false; // confirmed — release the in-flight lock from executeTrade()
         const digits=digitsFor(a);
         const side=pos.tradeData.tradeSide===1?'BUY':'SELL';
         const entry=pos.price?pos.price/1e5:0;
