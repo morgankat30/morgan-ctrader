@@ -1736,7 +1736,20 @@ function onExec(p){
   // just sat on the broker with no TP/SL logic tracking it. Paper trades
   // were unaffected because paperOpen()/paperClose() push straight into
   // a.positions locally and never go through this event at all.
-  if(et==='ORDER_FILLED'){
+  // FIX #3 (the actual actual root cause — the two fixes above were both
+  // correct but never got a chance to run): this app's own gateway sends
+  // executionType as the RAW cTrader enum INTEGER (3 for a fill), not as a
+  // string name. Confirmed directly by comparing against a second, already-
+  // working bot built on the same relay, whose equivalent handler checks
+  // `et===3` / `et===2` / `et===11` — plain numbers, never string names.
+  // `et==='ORDER_FILLED'` compares a number to a string, which in JS is
+  // never true, for any fill, ever. So this whole block — including the
+  // FIX and FIX #2 above it — has never actually executed on a real fill.
+  // Every real/demo order really did fill on the broker (hence it always
+  // showed up fine in cTrader's own app), but this code never even started
+  // reading the event to notice. Checking both forms below so this keeps
+  // working regardless of whether a given relay sends the number or the name.
+  if(et===3||et==='ORDER_FILLED'){
     const pos=p.position;
     if(pos&&pos.tradeData){
       const a=Object.values(state.assets).find(x=>x.symbolId===pos.tradeData.symbolId);
