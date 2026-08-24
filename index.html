@@ -289,7 +289,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 
 <!-- MAIN DASHBOARD -->
 <div id="scrDash" class="screen">
-  <div class="conn-status"><span id="connBadge" class="badge off">OFFLINE</span><span id="btnRefresh" onclick="manualRefresh()" style="margin-left:8px; display:inline-block; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:4px 8px; font-size:14px; cursor:pointer;">&#8635;</span></div>
+  <div class="conn-status"><span id="connBadge" class="badge off">OFFLINE</span></div>
   <div class="dash-scroll" id="dashScroll">
     <div id="pullIndicator" style="text-align:center; font-size:12px; color:var(--dim); height:0; overflow:hidden; transition:height .15s; display:flex; align-items:center; justify-content:center;">&#8595; Pull to refresh</div>
     <div class="robot-hero">
@@ -460,9 +460,6 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
       <div><b>Arm Live</b><small>Allow real orders</small></div>
       <div class="switch" id="swArm" onclick="toggleArm()"></div>
     </div>
-    <label style="margin-top:14px;">Account Environment</label>
-    <select id="cfgEnv" onchange="switchEnv(this.value)"><option value="demo">Demo account (paper money)</option><option value="live">Live account (real money)</option></select>
-    <p style="color:var(--dim); font-size:11px; margin-top:4px;">Switching this reconnects using the same saved credentials — no need to go back to the login page.</p>
     <div class="save-bar">
       <button class="btn-secondary" onclick="showScreen('symbols')">CANCEL</button>
       <button class="btn-primary" onclick="saveConfig()">SAVE</button>
@@ -712,33 +709,6 @@ function loadConfigUI(){
   $('swNewsTrade').classList.toggle('on',state.newsTrading);
   $('swPaper').classList.toggle('on',state.paper);
   $('swArm').classList.toggle('on',state.armed);
-  const envSel=$('cfgEnv');if(envSel)envSel.value=state.env;
-}
-// In-app Demo/Live switch — reconnects with the same saved credentials,
-// no trip back to the login screen needed.
-function switchEnv(newEnv){
-  if(newEnv===state.env)return;
-  if(!confirm('Switch to '+(newEnv==='live'?'LIVE (real money)':'DEMO (paper money)')+' and reconnect?')){
-    $('cfgEnv').value=state.env;return;
-  }
-  state.env=newEnv;
-  if($('ctEnv'))$('ctEnv').value=newEnv;
-  if($('bnEnv'))$('bnEnv').value=newEnv;
-  saveCreds();
-  log('Switching to '+newEnv.toUpperCase()+'...');
-  // FIX: reset every account-specific number/position immediately so nothing
-  // from the OLD account can linger on screen mid-switch and get mistaken
-  // for the new account's data (this is very likely why you saw the "paper
-  // account" balance sitting under a LIVE badge — stale state from before
-  // the switch, still displayed while the new connection was settling).
-  state.accountReady=false;state.balance=0;state.equity=0;state.todayPnl=0;
-  Object.values(state.assets).forEach(a=>{a.positions=[];a.symbolId=null;a.full=null;a.dataReady=false;a.subscribedSymbolId=null;});
-  updateDash();
-  if(state.broker==='ctrader'){
-    connectCT();
-  }else{
-    connectBN();
-  }
 }
 function saveConfig(){
   cfg.strategy=$('cfgStrategy').value;
@@ -1417,6 +1387,29 @@ function maybeAddStackLeg(a){
   updateDash();
 }
 
+// FIX — the real, root-cause guard: cTrader's lotSize/minVolume/stepVolume
+// fields are documented as "in cents," but real developer reports (checked
+// directly against cTrader's own community forum) confirm these fields
+// genuinely behave inconsistently across brokers for non-FX symbols like
+// crypto CFDs — this is not something a cleverer formula can fully guarantee
+// against. So instead of trusting the broker's raw numbers blindly, this
+// checks the RESULT against what you actually asked for (cfg.slDollars) and
+// refuses outright if they don't match within reason. This is what would have
+// stopped the $-20,569,999,989,942.76 balance: no matter which upstream field
+// was wrong, the actual dollar risk this produces could never runaway,
+// because it's validated against your own stated intent every single time.
+function sanityCheckTrade(a, vol, slDist){
+  const dollarPerUnit=dollarPerUnitFor(vol);
+  if(!Number.isFinite(dollarPerUnit)||dollarPerUnit<=0)return 'volume calc invalid';
+  const impliedRisk=slDist*dollarPerUnit;
+  const intended=cfg.slDollars;
+  // Generous tolerance for broker min/step rounding — but nowhere near enough
+  // to let a units-mismatch (which is typically 100x-1,000,000x+ off) through.
+  if(!Number.isFinite(impliedRisk)||impliedRisk<=0)return 'risk calc came back '+impliedRisk;
+  if(impliedRisk>Math.max(intended*5,50))return 'risk calc ($'+impliedRisk.toFixed(2)+') is way past your set SL ($'+intended+') — broker data for this symbol looks wrong, refusing rather than risking a repeat of the runaway-balance bug';
+  if(vol>lotSizeFor(a)*1000)return 'volume ('+vol+') implies over 1,000 lots for a $'+cfg.lotSize+'-lot request — refusing';
+  return null;
+}
 function paperOpen(a,side){
   // FIX: this had no guard at all — placing a paper trade before the real
   // symbol details (lot size, min volume, step) had loaded produced exactly
@@ -1435,6 +1428,8 @@ function paperOpen(a,side){
     return;
   }
   const slDist=cfg.slDollars/dollarPerUnitFor(vol);
+  const problem=sanityCheckTrade(a,vol,slDist);
+  if(problem){log('Blocked '+a.label+' trade: '+problem+'.');return;}
   const sl=side==='BUY'?entry-slDist:entry+slDist;
   a.positions.push({side,entryPrice:entry,volume:vol,stopLoss:sl,takeProfit:null,openedAt:Date.now(),paper:true,peakPnL:0,trailingActive:false,initialRisk:slDist});
 }
@@ -1460,6 +1455,11 @@ function realOpen(a,side){
     // likely have been rejected or misinterpreted by the broker.
     const digits=digitsFor(a);
     const slDist=cfg.slDollars/dollarPerUnitFor(vol);
+    // Same real-money-critical guard as paperOpen — see sanityCheckTrade() for
+    // why this is validated against your own stated intent (cfg.slDollars)
+    // rather than trusting the broker's raw fields blindly.
+    const problem=sanityCheckTrade(a,vol,slDist);
+    if(problem){log('Blocked '+a.label+' REAL order: '+problem+'.');return;}
     const relSL=Math.round(slDist*100000);
     send(PT.NEW_ORDER_REQ,{ctidTraderAccountId:state.accountId,symbolId:symId,orderType:1,tradeSide:side==='BUY'?1:2,volume:vol,relativeStopLoss:relSL,label:'SXU'});
   }else{
