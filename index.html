@@ -1680,7 +1680,21 @@ function checkTrail(a){
 function onExec(p){
   if(!p)return;
   const et=p.executionType;
-  if(et==='ORDER_FILL'){
+  // FIX (the actual root cause of "positions open on the broker but never
+  // show in the bot / never get managed"): cTrader's real enum value here is
+  // ORDER_FILLED, not ORDER_FILL — confirmed directly against Spotware's own
+  // published proto definitions. That one missing suffix meant this
+  // condition NEVER matched a real fill, ever. Every real order was placed
+  // successfully and filled correctly on the broker (which is why it showed
+  // up fine in the actual cTrader app) — but the code that's supposed to
+  // notice a fill happened and start tracking/managing that position locally
+  // silently never ran. The bot had no idea any of its real trades existed
+  // until the next full reconnect's RECONCILE_RES eventually picked them up
+  // (if it ever ran before you closed the trade manually on the broker
+  // side), which is also why positions sometimes appeared to "vanish" or
+  // hit POSITION_NOT_FOUND — the bot was working from stale/incomplete
+  // knowledge of what was actually open.
+  if(et==='ORDER_FILLED'){
     const a=Object.values(state.assets).find(x=>x.symbolId===p.symbolId);
     if(a){
       const digits=digitsFor(a);
