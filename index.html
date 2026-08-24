@@ -1694,40 +1694,63 @@ function onExec(p){
   // side), which is also why positions sometimes appeared to "vanish" or
   // hit POSITION_NOT_FOUND — the bot was working from stale/incomplete
   // knowledge of what was actually open.
+  // FIX #2 (the remaining reason real/demo trades fired on the broker but
+  // never appeared in the Open Positions box or got TP/SL-managed, even
+  // after the ORDER_FILLED fix above): ProtoOAExecutionEvent does NOT carry
+  // symbolId/positionId/volume/tradeSide/price/closedVolume as flat fields
+  // on the event itself — confirmed directly against Spotware's own proto
+  // (OpenApiMessages.proto / OpenApiModelMessages.proto). An opening fill's
+  // data lives nested under `position.positionId` / `position.tradeData.*` /
+  // `position.price`; a closing fill's data lives nested under a separate
+  // `deal` object (`deal.positionId`, `deal.symbolId`, `deal.executionPrice`,
+  // and `deal.closePositionDetail` which only exists on a closing deal).
+  // Reading p.symbolId / p.positionId / p.volume / p.closedVolume directly
+  // (as this did) always read `undefined`, so `a` never matched, the
+  // position was never pushed into a.positions, and updatePositionsUI()
+  // (which only renders from a.positions) had nothing to show — the trade
+  // just sat on the broker with no TP/SL logic tracking it. Paper trades
+  // were unaffected because paperOpen()/paperClose() push straight into
+  // a.positions locally and never go through this event at all.
   if(et==='ORDER_FILLED'){
-    const a=Object.values(state.assets).find(x=>x.symbolId===p.symbolId);
-    if(a){
-      const digits=digitsFor(a);
-      if(p.positionId&&p.volume>0){
-        const side=p.tradeSide===1?'BUY':'SELL';
-        const entry=p.price?p.price/1e5:0;
-        if(!a.positions.some(x=>x.positionId===p.positionId)){
-          a.positions.push({positionId:p.positionId,side,entryPrice:entry,volume:p.volume,stopLoss:null,takeProfit:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false,initialRisk:cfg.slDollars/dollarPerUnitFor(p.volume)});
+    const pos=p.position;
+    if(pos&&pos.tradeData){
+      const a=Object.values(state.assets).find(x=>x.symbolId===pos.tradeData.symbolId);
+      if(a&&pos.positionId&&pos.tradeData.volume>0){
+        const digits=digitsFor(a);
+        const side=pos.tradeData.tradeSide===1?'BUY':'SELL';
+        const entry=pos.price?pos.price/1e5:0;
+        if(!a.positions.some(x=>x.positionId===pos.positionId)){
+          a.positions.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:null,takeProfit:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false,initialRisk:cfg.slDollars/dollarPerUnitFor(pos.tradeData.volume)});
         }
         log('Filled '+side+' '+a.label+' @ '+entry.toFixed(digits));
+        updateDash();
       }
-      if(p.closedVolume>0){
-        const idx=a.positions.findIndex(x=>x.positionId===p.positionId);
+    }
+    const deal=p.deal;
+    if(deal&&deal.closePositionDetail){
+      const a=Object.values(state.assets).find(x=>x.symbolId===deal.symbolId);
+      if(a){
+        const idx=a.positions.findIndex(x=>x.positionId===deal.positionId);
         if(idx>=0){
-          const pos=a.positions[idx];const exit=p.price?p.price/1e5:0;
-          const pnl=(pos.side==='BUY'?exit-pos.entryPrice:pos.entryPrice-exit)*dollarPerUnitFor(pos.volume);
+          const closedPos=a.positions[idx];const exit=deal.executionPrice?deal.executionPrice/1e5:0;
+          const pnl=(closedPos.side==='BUY'?exit-closedPos.entryPrice:closedPos.entryPrice-exit)*dollarPerUnitFor(closedPos.volume);
           state.todayPnl+=pnl;if(pnl>0)state.wins++;else state.losses++;
           a.positions.splice(idx,1);a.lastCloseAt=Date.now();
-          log('Closed '+pos.side+' PnL '+fmtPnL(pnl));
+          log('Closed '+closedPos.side+' PnL '+fmtPnL(pnl));
           if(cfg.strategy==='flip'){
             // Same forced-alternation rule as paperClose — always the
             // opposite side of what just closed, regardless of signal.
-            const nextSide=pos.side==='BUY'?'SELL':'BUY';
+            const nextSide=closedPos.side==='BUY'?'SELL':'BUY';
             if(!state.paused&&!state.stopped&&state.auto){
               setTimeout(()=>{if(!state.paused&&!state.stopped&&state.auto)executeTrade(a,nextSide);},Math.max(500,cfg.cooldownSec*1000));
             }
-          }else if(cfg.autoReverse&&a.signal!=='WAIT'&&a.signal!==pos.side&&!state.paused&&!state.stopped&&state.auto){
+          }else if(cfg.autoReverse&&a.signal!=='WAIT'&&a.signal!==closedPos.side&&!state.paused&&!state.stopped&&state.auto){
             setTimeout(()=>executeTrade(a,a.signal),500);
           }
+          updateDash();
         }
       }
     }
-    updateDash();
   }
 }
 
