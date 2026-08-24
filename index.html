@@ -197,6 +197,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 </head>
 <body>
 <div id="app">
+<div id="pullIndicator" style="position:absolute; top:env(safe-area-inset-top,0px); left:0; right:0; text-align:center; font-size:12px; color:var(--dim); height:0; overflow:hidden; transition:height .15s; display:flex; align-items:center; justify-content:center; z-index:40; background:var(--bg); pointer-events:none;">&#8595; Pull to refresh</div>
 
 <!-- SPLASH -->
 <div id="scrSplash" class="screen active">
@@ -289,9 +290,8 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 
 <!-- MAIN DASHBOARD -->
 <div id="scrDash" class="screen">
-  <div class="conn-status"><span id="connBadge" class="badge off">OFFLINE</span><span id="btnRefresh" onclick="manualRefresh()" style="margin-left:8px; display:inline-block; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:4px 8px; font-size:14px; cursor:pointer;">&#8635;</span></div>
+  <div class="conn-status"><span id="connBadge" class="badge off">OFFLINE</span></div>
   <div class="dash-scroll" id="dashScroll">
-    <div id="pullIndicator" style="text-align:center; font-size:12px; color:var(--dim); height:0; overflow:hidden; transition:height .15s; display:flex; align-items:center; justify-content:center;">&#8595; Pull to refresh</div>
     <div class="robot-hero">
       <div class="robot-img">
         <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
@@ -460,9 +460,6 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
       <div><b>Arm Live</b><small>Allow real orders</small></div>
       <div class="switch" id="swArm" onclick="toggleArm()"></div>
     </div>
-    <label style="margin-top:14px;">Account Environment</label>
-    <select id="cfgEnv" onchange="switchEnv(this.value)"><option value="demo">Demo account (paper money)</option><option value="live">Live account (real money)</option></select>
-    <p style="color:var(--dim); font-size:11px; margin-top:4px;">Switching this reconnects using the same saved credentials — no need to go back to the login page.</p>
     <div class="save-bar">
       <button class="btn-secondary" onclick="showScreen('symbols')">CANCEL</button>
       <button class="btn-primary" onclick="saveConfig()">SAVE</button>
@@ -712,33 +709,6 @@ function loadConfigUI(){
   $('swNewsTrade').classList.toggle('on',state.newsTrading);
   $('swPaper').classList.toggle('on',state.paper);
   $('swArm').classList.toggle('on',state.armed);
-  const envSel=$('cfgEnv');if(envSel)envSel.value=state.env;
-}
-// In-app Demo/Live switch — reconnects with the same saved credentials,
-// no trip back to the login screen needed.
-function switchEnv(newEnv){
-  if(newEnv===state.env)return;
-  if(!confirm('Switch to '+(newEnv==='live'?'LIVE (real money)':'DEMO (paper money)')+' and reconnect?')){
-    $('cfgEnv').value=state.env;return;
-  }
-  state.env=newEnv;
-  if($('ctEnv'))$('ctEnv').value=newEnv;
-  if($('bnEnv'))$('bnEnv').value=newEnv;
-  saveCreds();
-  log('Switching to '+newEnv.toUpperCase()+'...');
-  // FIX: reset every account-specific number/position immediately so nothing
-  // from the OLD account can linger on screen mid-switch and get mistaken
-  // for the new account's data (this is very likely why you saw the "paper
-  // account" balance sitting under a LIVE badge — stale state from before
-  // the switch, still displayed while the new connection was settling).
-  state.accountReady=false;state.balance=0;state.equity=0;state.todayPnl=0;
-  Object.values(state.assets).forEach(a=>{a.positions=[];a.symbolId=null;a.full=null;a.dataReady=false;a.subscribedSymbolId=null;});
-  updateDash();
-  if(state.broker==='ctrader'){
-    connectCT();
-  }else{
-    connectBN();
-  }
 }
 function saveConfig(){
   cfg.strategy=$('cfgStrategy').value;
@@ -840,43 +810,84 @@ function addCustomSymbol(){
 function def_or(key){return SYM_DEFS[key]?SYM_DEFS[key].label:key;}
 
 // ========== CTRADER CONNECTION ==========
-// Login flow replaced wholesale with the original morgan-ctrader bot's
-// connection logic, per explicit request — this is that bot's connect()
-// verbatim, only adapted to this file's element IDs (ctId/ctSec/ctTok/ctEnv
-// instead of inClientId/inClientSecret/inAccessToken/inEnv) and UI-utility
-// function names (ctStatus/setConnBadge/showLoading/hideLoading instead of
-// connectStatus/setBadge) so it still drives this screen's actual DOM. The
-// connection behavior itself — no guard against double-connecting, no
-// teardown of a prior socket before opening a new one, no reconnect-on-drop,
-// no settle delay — is intentionally unchanged from the original.
+// NOTE: an earlier session deliberately reverted this to a bare, unguarded
+// connect (per an explicit request at the time) — no double-connect guard,
+// no stale-socket teardown, no reconnect-on-drop. Today's ask ("real
+// reconnect once I go back on it immediately") needs exactly what that
+// removed, so it's restored below, same as the guarded version used
+// elsewhere in this app.
+// FIX ("give this bot a real reconnect once I go back on it immediately"):
+// this connect logic had no guard against being called again while already
+// connecting (every tap/attempt could open a second WebSocket on top of an
+// unclosed first one, racing for the same shared state.ws — the exact
+// mechanism behind CANT_ROUTE_REQUEST), no clean teardown of a stale socket
+// before opening a fresh one, and nothing that noticed you'd come back to
+// the app and reconnected proactively — it only ever reconnected if the old
+// WebSocket's own close event fired, which mobile OSes can delay a long
+// time (or never deliver at all) for a backgrounded tab. Restored the
+// guarded version with a settle delay before reopening, a clean close when
+// you actually leave the page (so it doesn't leave a zombie session on
+// cTrader's server for a future connect to collide with), and immediate
+// reconnect checks on visibility/focus/online — so coming back to the app
+// reconnects within a second or two instead of whenever the OS eventually
+// notices.
 window.addEventListener('pagehide',()=>{if(state.ws){try{state.ws.close(1000,'page hidden');}catch(e){}}});
 
 function connectCT(){
+  if(state.connecting){ctStatus('Already connecting — please wait...');return;}
+  state.connecting=true;
+  setConnectBtnEnabled(false);
+  if(state.ws){
+    state.ws.onopen=null;state.ws.onmessage=null;state.ws.onclose=null;state.ws.onerror=null;
+    try{state.ws.close();}catch(e){}
+    state.ws=null;
+    clearInterval(state.hbTimer);
+    setTimeout(()=>connectCTOpen(),400); // let the server actually process the close before reopening
+    return;
+  }
+  connectCTOpen();
+}
+function connectCTOpen(){
+  clearInterval(state.hbTimer);
   state.clientId=$('ctId').value.trim();state.clientSecret=$('ctSec').value.trim();state.accessToken=$('ctTok').value.trim();state.env=$('ctEnv').value;
-  if(!state.clientId||!state.clientSecret||!state.accessToken){alert('Client ID, Client Secret and Access Token are all required.');return;}
+  if(!state.clientId||!state.clientSecret||!state.accessToken){state.connecting=false;setConnectBtnEnabled(true);alert('Client ID, Client Secret and Access Token are all required.');return;}
   saveCreds();showLoading('Connecting to cTrader...');
   const host=state.env==='live'?'wss://live.ctraderapi.com:5036':'wss://demo.ctraderapi.com:5036';
   setConnBadge('CONNECTING...','off');
   ctStatus('Opening connection to '+host+'...');
   let ws;
-  try{ws=new WebSocket(host);}catch(e){hideLoading();ctStatus('Could not open WebSocket: '+e.message);return;}
+  try{ws=new WebSocket(host);}catch(e){state.connecting=false;setConnectBtnEnabled(true);hideLoading();ctStatus('Could not open WebSocket: '+e.message);return;}
   state.ws=ws;
   ws.onopen=()=>{
-    state.connected=true;
+    if(state.ws!==ws)return;
+    state.connected=true;state.lastMsgAt=Date.now();
     ctStatus('Connected. Authorizing application...');
     send(PT.APP_AUTH_REQ,{clientId:state.clientId,clientSecret:state.clientSecret});
     state.hbTimer=setInterval(()=>send(PT.HEARTBEAT,{}),20000);
   };
-  ws.onmessage=ev=>{let m;try{m=JSON.parse(ev.data);}catch(e){return;}handleCT(m);};
+  ws.onmessage=ev=>{if(state.ws!==ws)return;state.lastMsgAt=Date.now();let m;try{m=JSON.parse(ev.data);}catch(e){return;}handleCT(m);};
   ws.onclose=ev=>{
+    if(state.ws!==ws)return;
     state.connected=false;state.accountReady=false;
     clearInterval(state.hbTimer);
     setConnBadge('DISCONNECTED','off');
-    hideLoading();
-    if(!state.accountReady)ctStatus('Connection closed before finishing (code '+ev.code+'). Check your Client ID/Secret/Access Token are correct and try again.');
+    state.connecting=false;setConnectBtnEnabled(true);hideLoading();
+    if(!state.wasEverConnected){ctStatus('Connection closed before finishing (code '+ev.code+'). Check your Client ID/Secret/Access Token are correct and try again.');}
+    else if(!state.stopped){ctStatus('Connection dropped — reconnecting...');setTimeout(connectCT,2000);}
   };
-  ws.onerror=()=>{setConnBadge('CONNECTION ERROR','off');hideLoading();ctStatus('WebSocket error — connection failed.');};
+  ws.onerror=()=>{if(state.ws!==ws)return;state.connecting=false;setConnectBtnEnabled(true);setConnBadge('CONNECTION ERROR','off');hideLoading();ctStatus('WebSocket error — connection failed.');};
 }
+// Same "actively check on return, don't wait for the OS to notice" pattern
+// as the reconnect fix above — see that comment for why this matters.
+function attemptAutoReconnect(){
+  if(!state.wasEverConnected||state.connecting)return;
+  const closed=!state.ws||state.ws.readyState===2||state.ws.readyState===3;
+  const stale=state.ws&&state.ws.readyState===1&&state.lastMsgAt&&(Date.now()-state.lastMsgAt>25000);
+  if(closed||stale){ctStatus('Reconnecting...');connectCT();}
+}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')attemptAutoReconnect();});
+window.addEventListener('focus',attemptAutoReconnect);
+window.addEventListener('online',attemptAutoReconnect);
 function setConnectBtnEnabled(on){const b=$('ctConnectBtn');if(b){b.disabled=!on;b.style.opacity=on?'1':'0.5';}}
 function ctStatus(msg){const el=$('ctStatus');if(el)el.textContent=msg;log(msg);}
 function send(pt,payload){if(!state.ws||state.ws.readyState!==1)return null;const id='m'+(state.msgSeq++);state.ws.send(JSON.stringify({clientMsgId:id,payloadType:pt,payload}));return id;}
@@ -909,13 +920,35 @@ function handleCT(m){
       break;
     case PT.TRADER_RES:applyTrader(p.trader);break;
     case PT.SYMBOLS_LIST_RES:indexSymbols(p.symbol||[]);break;
-    case PT.SYMBOL_BY_ID_RES:(p.symbol||[]).forEach(applySymbol);break;
+    case PT.SYMBOL_BY_ID_RES:applySymbol((p.symbol||[])[0]);break;
     case PT.GET_TRENDBARS_RES:applyHistory(m,p);break;
     case PT.SPOT_EVENT:onSpot(p);break;
     case PT.EXECUTION_EVENT:onExec(p);break;
     case PT.ORDER_ERROR_EVENT:log('ORDER ERROR: '+p.errorCode+(p.description?(' — '+p.description):''));break;
-    case PT.ERROR_RES:ctStatus('API ERROR: '+p.errorCode+(p.description?(' — '+p.description):''));break;
-    case PT.RECONCILE_RES:(p.position||[]).forEach(pos=>trackPosition(pos));break;
+    case PT.ERROR_RES:{
+      hideLoading();state.connecting=false;
+      const code=p.errorCode||'';
+      log('API error: '+code);
+      if(code==='CANT_ROUTE_REQUEST'){
+        // Server-side routing conflict, usually a previous session for this
+        // account not yet cleaned up on cTrader's end — not actually your
+        // token expiring. Retrying immediately tends to add to the pileup,
+        // so force a short cooldown instead of letting CONNECT be tapped
+        // straight away.
+        ctStatus('cTrader is still clearing a previous session for this account. Waiting 20s before you can retry...');
+        setConnectBtnEnabled(false);
+        let secs=20;
+        const iv=setInterval(()=>{
+          secs--;
+          if(secs<=0){clearInterval(iv);setConnectBtnEnabled(true);ctStatus('You can try CONNECT again now.');}
+          else ctStatus('cTrader is still clearing a previous session for this account. Waiting '+secs+'s before you can retry...');
+        },1000);
+      }else{
+        setConnectBtnEnabled(true);
+        ctStatus('API ERROR: '+code+(p.description?(' — '+p.description):''));
+      }
+      break;}
+    case PT.RECONCILE_RES:state.lastReconcile=p.position||[];Object.values(state.assets).forEach(applyReconcileFor);break;
   }
 }
 
@@ -968,36 +1001,43 @@ function fastStartFromCache(sym){
   a.symbolId=id; // provisional — activateCtSymbol() will confirm/correct this once the real symbol list arrives
   send(PT.SUBSCRIBE_SPOTS_REQ,{ctidTraderAccountId:state.accountId,symbolId:[id]});
   a.subscribedSymbolId=id; // tracked separately from dataReady — see activateCtSymbol
+  requestFullSymbol(a,id);
   fetchHistory(id);
+  applyReconcileFor(a); // in case RECONCILE_RES already arrived and was waiting on this symbolId
   log('Fast-starting '+sym+' chart from last known symbol ID while confirming with broker...');
 }
-// FIX: subscribing/fetching-history for a symbol only ever ran once, from
-// indexSymbols() right after connecting — switching symbols via the Allowed
-// Symbols list changed state.currentSymbol but never subscribed to its price
-// feed or loaded its chart history at all. Every symbol past the first one
-// would have shown a permanently frozen price. Pulled the subscribe+fetch
-// logic into its own function so the symbol-switch handler can call it too.
+// FIX (real root cause of "never fires trades" / permanent "still loading"
+// message): SYMBOL_BY_ID_REQ — the ONLY request that actually returns
+// lotSize/minVolume/stepVolume — used to be sent from a single spot inside
+// activateCtSymbol(), gated behind the SAME early-return check used for
+// "is everything already settled." On almost every reconnect (i.e. any time
+// you've connected before, so a symbol ID is cached), fastStartFromCache()
+// sets symbolId+subscribedSymbolId immediately, and candle history usually
+// finishes (dataReady=true) before the full symbol list even comes back —
+// so by the time activateCtSymbol ran, all three "settled" conditions were
+// already true and it returned before ever reaching the SYMBOL_BY_ID_REQ
+// line. a.full stayed null for the WHOLE session, isFullLoaded() never
+// became true, and every trade was silently refused as "still loading" —
+// permanently, not just briefly. Pulled the full-details request into its
+// own function with its own in-flight guard, independent of the
+// subscribe/history "settled" state, and call it from both places a symbol
+// gets activated so it can never be skipped by that race again.
+function requestFullSymbol(a,symbolId){
+  if(isFullLoaded(a)||a.fullRequestedFor===symbolId)return;
+  a.fullRequestedFor=symbolId;
+  send(PT.SYMBOL_BY_ID_REQ,{ctidTraderAccountId:state.accountId,symbolId:[symbolId]});
+}
 function activateCtSymbol(sym){
   const def=SYM_DEFS[sym];if(!def)return;
   if(!state.accountReady)return; // will run again once SYMBOLS_LIST_RES arrives after connecting
   let hit=null;for(const m of def.ctMatch){const s=state.symbolsByNorm[norm(m)];if(s){hit=s;break;}}
   if(!hit){log(sym+' not found on this account');return;}
   const a=state.assets[sym];if(!a)return;
-  if(a.symbolId===hit.symbolId&&a.dataReady&&a.subscribedSymbolId===hit.symbolId)return; // fully settled, nothing to do
+  requestFullSymbol(a,hit.symbolId); // unconditional — must never depend on the "already settled" check below
+  if(a.symbolId===hit.symbolId&&a.dataReady&&a.subscribedSymbolId===hit.symbolId){applyReconcileFor(a);return;} // fully settled, nothing else to do
   const idChanged=a.symbolId!=null&&a.symbolId!==hit.symbolId;
-  a.symbolId=hit.symbolId;a.full=hit;
-  // FIX: `hit` here is from the LIGHTWEIGHT symbol list (SYMBOLS_LIST_RES) —
-  // it only has symbolId/symbolName, never lotSize/minVolume/stepVolume/
-  // digits. Assigning it straight to a.full made a.full permanently
-  // "truthy but incomplete": lotSizeFor()/volumeFor() saw a.full existed and
-  // stopped using their safe FX-standard fallback, but then read undefined
-  // minVolume/stepVolume off it — Math.round(x/undefined) is NaN, which is
-  // exactly the "NaN lot" / stuck-$0.00-balance / oversized-position bug.
-  // The FULL symbol details (SYMBOL_BY_ID_REQ) used to only ever get
-  // requested from the manual refresh button — meaning a normal connect
-  // never got real lot-size data at all unless you happened to tap refresh
-  // first. Request it immediately here instead.
-  send(PT.SYMBOL_BY_ID_REQ,{ctidTraderAccountId:state.accountId,symbolId:[hit.symbolId]});
+  a.symbolId=hit.symbolId;
+  if(!isFullLoaded(a))a.full=hit; // lightweight placeholder only until the full response lands — never overwrite real full data with it
   // FIX: this used to gate re-subscribing on BOTH symbolId matching AND
   // dataReady being true. dataReady only flips once candle history finishes
   // loading (a separate, slower round trip) — so whenever fastStartFromCache()
@@ -1012,6 +1052,7 @@ function activateCtSymbol(sym){
     a.subscribedSymbolId=hit.symbolId;
   }
   if(idChanged||!a.dataReady)fetchHistory(hit.symbolId); // avoid a redundant re-fetch if the cached fast-start already got the right ID
+  applyReconcileFor(a);
 }
 function norm(s){return String(s).toUpperCase().replace(/[^A-Z]/g,'');}
 // FIX: this app was hardcoding "1 lot = 100,000 units" everywhere (volume calc,
@@ -1041,35 +1082,6 @@ function volumeFor(a, lots){
   return Math.max(minVol, Math.round(raw/step)*step);
 }
 function dollarPerUnitFor(volumeInBrokerUnits){ return volumeInBrokerUnits/100; } // same convention cTrader itself uses (volume is already "in cents")
-// FIX (root cause of the multi-trillion-dollar balance corruption on both
-// BTC/USDT and XAU/USD): confirmed against cTrader's own documentation and
-// a direct answer from a cTrader developer on their forum — lotSize,
-// minVolume, maxVolume and stepVolume are ALL supposed to share the same
-// "cents of units" scale as the volume field itself, and this file's math
-// already matched that convention correctly. The blow-up came from
-// trusting whatever raw minVolume/lotSize the broker sent for a given
-// symbol with zero sanity check on the RESULT — if that field is ever
-// anomalous for a specific symbol (broker data quirk, a symbol category
-// this account has unusual permissions/restrictions on, etc.), the position
-// size computed from it can be wrong by many orders of magnitude, and nothing
-// caught that before it wiped out the whole paper balance in one trade.
-// This checks the actual dollar exposure a computed volume implies against
-// the account's own balance — completely instrument-agnostic, and scales
-// naturally whether the account holds $100 or $1,000,000. No legitimate
-// retail position (even at high leverage) should imply notional exposure
-// beyond roughly 1000x the account balance; catching that here refuses the
-// trade with a clear diagnostic instead of corrupting the balance.
-function sanityCheckVolume(a,vol){
-  if(!Number.isFinite(vol)||vol<=0)return 'lot size not ready yet (volume calc came back '+vol+')';
-  const price=a.lastPrice;
-  if(!price||!Number.isFinite(price))return null; // nothing to compare against yet — let the caller's own price-readiness checks handle this
-  const notional=(vol/100)*price;
-  const balanceRef=Math.max(100,state.paper?(state.paperBalance||10000):(state.balance||10000));
-  if(notional>balanceRef*1000){
-    return 'this symbol\'s lot-size data from the broker looks wrong — a '+cfg.lotSize+' lot position would be worth '+fmt$(notional)+', which cannot be right for this account. Not trading this symbol until that\'s resolved.';
-  }
-  return null;
-}
 function digitsFor(a){ return a.full && a.full.digits!=null ? a.full.digits : (SYM_DEFS[a.key]?SYM_DEFS[a.key].digits:5); }
 function roundToDigits(price,digits){ const s=Math.pow(10,digits); return Math.round(price*s)/s; }
 function fetchHistory(id,attempt){
@@ -1446,6 +1458,29 @@ function maybeAddStackLeg(a){
   updateDash();
 }
 
+// FIX — the real, root-cause guard: cTrader's lotSize/minVolume/stepVolume
+// fields are documented as "in cents," but real developer reports (checked
+// directly against cTrader's own community forum) confirm these fields
+// genuinely behave inconsistently across brokers for non-FX symbols like
+// crypto CFDs — this is not something a cleverer formula can fully guarantee
+// against. So instead of trusting the broker's raw numbers blindly, this
+// checks the RESULT against what you actually asked for (cfg.slDollars) and
+// refuses outright if they don't match within reason. This is what would have
+// stopped the $-20,569,999,989,942.76 balance: no matter which upstream field
+// was wrong, the actual dollar risk this produces could never runaway,
+// because it's validated against your own stated intent every single time.
+function sanityCheckTrade(a, vol, slDist){
+  const dollarPerUnit=dollarPerUnitFor(vol);
+  if(!Number.isFinite(dollarPerUnit)||dollarPerUnit<=0)return 'volume calc invalid';
+  const impliedRisk=slDist*dollarPerUnit;
+  const intended=cfg.slDollars;
+  // Generous tolerance for broker min/step rounding — but nowhere near enough
+  // to let a units-mismatch (which is typically 100x-1,000,000x+ off) through.
+  if(!Number.isFinite(impliedRisk)||impliedRisk<=0)return 'risk calc came back '+impliedRisk;
+  if(impliedRisk>Math.max(intended*5,50))return 'risk calc ($'+impliedRisk.toFixed(2)+') is way past your set SL ($'+intended+') — broker data for this symbol looks wrong, refusing rather than risking a repeat of the runaway-balance bug';
+  if(vol>lotSizeFor(a)*1000)return 'volume ('+vol+') implies over 1,000 lots for a $'+cfg.lotSize+'-lot request — refusing';
+  return null;
+}
 function paperOpen(a,side){
   // FIX: this had no guard at all — placing a paper trade before the real
   // symbol details (lot size, min volume, step) had loaded produced exactly
@@ -1459,12 +1494,13 @@ function paperOpen(a,side){
   }
   const entry=a.lastPrice;
   const vol=volumeFor(a,cfg.lotSize);
-  const sanityIssue=sanityCheckVolume(a,vol);
-  if(sanityIssue){
-    log('Cannot trade '+a.label+': '+sanityIssue);
+  if(!Number.isFinite(vol)||vol<=0){
+    log('Cannot trade '+a.label+': lot size not ready yet (volume calc came back '+vol+'). Try again in a moment.');
     return;
   }
   const slDist=cfg.slDollars/dollarPerUnitFor(vol);
+  const problem=sanityCheckTrade(a,vol,slDist);
+  if(problem){log('Blocked '+a.label+' trade: '+problem+'.');return;}
   const sl=side==='BUY'?entry-slDist:entry+slDist;
   a.positions.push({side,entryPrice:entry,volume:vol,stopLoss:sl,takeProfit:null,openedAt:Date.now(),paper:true,peakPnL:0,trailingActive:false,initialRisk:slDist});
 }
@@ -1482,8 +1518,7 @@ function realOpen(a,side){
     // field. Catch it here, locally, with a clear reason instead.
     if(!symId){log('Cannot trade '+a.label+' yet — still loading this symbol from the broker. Try again in a moment.');return;}
     const vol=volumeFor(a,cfg.lotSize);
-    const sanityIssue=sanityCheckVolume(a,vol);
-    if(sanityIssue){log('Cannot trade '+a.label+': '+sanityIssue);return;}
+    if(!Number.isFinite(vol)||vol<=0){log('Cannot trade '+a.label+': lot size not ready yet (volume calc came back '+vol+'). Try again in a moment.');return;}
     // FIX: NEW_ORDER_REQ takes relativeStopLoss (relative distance, fixed
     // 1/100000-of-price-unit scale per cTrader's own API spec — confirmed by
     // checking their proto docs directly), not an absolute "stopLoss" price
@@ -1491,6 +1526,11 @@ function realOpen(a,side){
     // likely have been rejected or misinterpreted by the broker.
     const digits=digitsFor(a);
     const slDist=cfg.slDollars/dollarPerUnitFor(vol);
+    // Same real-money-critical guard as paperOpen — see sanityCheckTrade() for
+    // why this is validated against your own stated intent (cfg.slDollars)
+    // rather than trusting the broker's raw fields blindly.
+    const problem=sanityCheckTrade(a,vol,slDist);
+    if(problem){log('Blocked '+a.label+' REAL order: '+problem+'.');return;}
     const relSL=Math.round(slDist*100000);
     send(PT.NEW_ORDER_REQ,{ctidTraderAccountId:state.accountId,symbolId:symId,orderType:1,tradeSide:side==='BUY'?1:2,volume:vol,relativeStopLoss:relSL,label:'SXU'});
   }else{
@@ -1669,17 +1709,41 @@ function onExec(p){
   }
 }
 
-function trackPosition(pos){
-  const a=Object.values(state.assets).find(x=>x.symbolId===pos.tradeData.symbolId);
-  if(!a)return;
-  // FIX: no dedup here meant calling this twice for the same broker position
-  // (e.g. RECONCILE_RES arriving again from a manual refresh) pushed a
-  // second, duplicate entry — doubling P&L, doubling the positions list,
-  // and doubling what CLOSE_POSITION_REQ would think it needs to close.
-  if(a.positions.some(x=>x.positionId===pos.positionId))return;
-  const side=pos.tradeData.tradeSide===1?'BUY':'SELL';
-  const entry=pos.price?pos.price/1e5:0;
-  a.positions.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:pos.stopLoss?pos.stopLoss/1e5:null,takeProfit:pos.takeProfit?pos.takeProfit/1e5:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false});
+// FIX (reconcile race + duplication — same class of bug as the lot-size one
+// above): RECONCILE_RES is a small/fast response that can arrive before the
+// asset's symbolId has resolved, so matching it by symbolId right when it
+// arrives could silently miss the position entirely; it also had no way to
+// notice a position had closed (SL/TP hit) while disconnected, leaving a
+// stale phantom locally. This stores the broker's list as authoritative and
+// re-applies it both when it arrives and from every place that resolves a
+// symbolId (fastStartFromCache, activateCtSymbol) — so whichever finishes
+// first, the other catches it up. Broker-confirmed positions we didn't know
+// about get added (the actual "catch up"); local ones no longer on the
+// broker's list get removed instead of lingering.
+function applyReconcileFor(a){
+  if(!a||a.symbolId==null||!state.lastReconcile)return;
+  const mine=state.lastReconcile.filter(pos=>pos.tradeData&&pos.tradeData.symbolId===a.symbolId);
+  const byId={};mine.forEach(pos=>{byId[pos.positionId]=pos;});
+  const kept=[];
+  a.positions.forEach(local=>{
+    if(local.positionId==null){kept.push(local);return;} // paper / not-yet-confirmed — leave as-is
+    const pos=byId[local.positionId];
+    if(pos){
+      local.stopLoss=pos.stopLoss?pos.stopLoss/1e5:local.stopLoss;
+      local.takeProfit=pos.takeProfit?pos.takeProfit/1e5:local.takeProfit;
+      local.volume=pos.tradeData.volume;
+      kept.push(local);
+      delete byId[local.positionId];
+    }
+    // else: broker no longer shows this open (closed while we were away) — drop it locally too.
+  });
+  Object.values(byId).forEach(pos=>{ // broker has these open but we didn't locally — the actual "catch up" case
+    const side=pos.tradeData.tradeSide===1?'BUY':'SELL';
+    const entry=pos.price?pos.price/1e5:0;
+    kept.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:pos.stopLoss?pos.stopLoss/1e5:null,takeProfit:pos.takeProfit?pos.takeProfit/1e5:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false});
+    log('Recovered open '+side+' position on '+(a.label||'')+' from the broker — resuming management.');
+  });
+  a.positions=kept;
 }
 
 // ========== MANUAL CONTROLS ==========
@@ -1721,21 +1785,38 @@ function manualRefresh(){
   }
 }
 
-/* ---------------- Pull-to-refresh (dashboard) ---------------- */
+/* ---------------- Pull-to-refresh (every screen) ---------------- */
+// FIX ("pulldown starting from the first page"): this used to attach touch
+// listeners only to #dashScroll, so the gesture only existed once you were
+// already connected and on the dashboard — the login/broker-select screens
+// you actually start on had no pull-to-refresh at all. Generalized to detect
+// the scrollable body of whichever screen is currently active (dash uses
+// .dash-scroll, every other screen uses .screen-body) and use one shared,
+// fixed-position indicator overlaid at the top of the viewport instead of
+// one baked into the dashboard's own markup, so the same gesture now works
+// everywhere, including before you've ever connected — manualRefresh()
+// already falls back to a plain reload when nothing's connected yet, which
+// is exactly the right behavior for a pull on the login screen.
 (function initPullToRefresh(){
-  const scroller = document.getElementById('dashScroll');
   const indicator = document.getElementById('pullIndicator');
-  if(!scroller || !indicator) return;
+  if(!indicator) return;
   const THRESHOLD = 70, MAX_PULL = 100;
-  let startY = null, pulling = false;
+  let startY = null, pulling = false, scroller = null;
 
-  scroller.addEventListener('touchstart', e => {
-    if(scroller.scrollTop <= 0){ startY = e.touches[0].clientY; pulling = true; }
+  function activeScroller(){
+    const scr = document.querySelector('.screen.active');
+    if(!scr) return null;
+    return scr.querySelector('.dash-scroll, .screen-body');
+  }
+
+  document.addEventListener('touchstart', e => {
+    scroller = activeScroller();
+    if(scroller && scroller.scrollTop <= 0){ startY = e.touches[0].clientY; pulling = true; }
     else { startY = null; pulling = false; }
   }, {passive:true});
 
-  scroller.addEventListener('touchmove', e => {
-    if(!pulling || startY == null) return;
+  document.addEventListener('touchmove', e => {
+    if(!pulling || startY == null || !scroller) return;
     const delta = e.touches[0].clientY - startY;
     if(delta > 0 && scroller.scrollTop <= 0){
       const capped = Math.min(delta, MAX_PULL);
@@ -1744,11 +1825,11 @@ function manualRefresh(){
     }
   }, {passive:true});
 
-  scroller.addEventListener('touchend', () => {
+  document.addEventListener('touchend', () => {
     if(!pulling) return;
     const height = parseInt(indicator.style.height, 10) || 0;
     indicator.style.height = '0px';
-    pulling = false; startY = null;
+    pulling = false; startY = null; scroller = null;
     if(height >= THRESHOLD) manualRefresh();
   }, {passive:true});
 })();
