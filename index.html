@@ -2197,6 +2197,45 @@ window.MeganBotAdapter = {
 
   arm(){ if(!state.armed) toggleArm(); },
   disarm(){ if(state.armed){$('swArm').classList.remove('on');state.armed=false;saveCreds();} },
+  // FIX (Megan) — "she's supposed to log in/out once I command it, using
+  // saved details": there was genuinely no such capability wired up at all
+  // — connectCT()/connectBN() only ever ran from the Start Now button, with
+  // no way to reach them by voice afterward, and no logout/disconnect
+  // existed anywhere in the app. That's why she said "I'm not capable of
+  // logging in" — she was telling the truth about what tools she'd been
+  // given, not refusing. Both are real now, reusing the exact same
+  // credential check and connect functions the Start Now flow already uses
+  // — same safety checks, not a shortcut around them.
+  connect(){
+    const hasCt=!!localStorage.getItem('tpea_ct_id');
+    const hasBn=!!localStorage.getItem('tpea_bn_key');
+    if(state.ws&&state.ws.readyState===1)return 'already-connected';
+    if(hasCt){chooseBroker('ctrader');connectCT();return 'connecting-ctrader';}
+    if(hasBn){chooseBroker('binance');connectBN();return 'connecting-binance';}
+    return 'no-saved-credentials';
+  },
+  disconnect(){
+    if(!state.ws||state.ws.readyState!==1)return 'already-disconnected';
+    try{state.ws.close();}catch(e){}
+    log('Disconnected (voice command)');
+    return 'disconnected';
+  },
+  isConnected(){ return !!(state.ws&&state.ws.readyState===1); },
+  // FIX (Megan) — "tell me when news is about to happen and give me a
+  // direction": the Economic Calendar countdown was already tracked and
+  // shown in the UI (state.nextNewsEvent etc. drive the countdown pill) but
+  // Megan had no way to read it — this exposes exactly what's already on
+  // screen, plus the live signal, so she can speak to both without
+  // inventing anything not actually on the chart.
+  getNewsContext(){
+    const el=$('newsText');const timeEl=$('newsCountdown');
+    const a=state.assets[state.currentSymbol];
+    const lines=[];
+    if(el&&el.textContent&&el.textContent!=='No upcoming events')lines.push('Next scheduled news: '+el.textContent+(timeEl&&timeEl.textContent?', in '+timeEl.textContent:''));
+    else lines.push('No scheduled news event is loaded right now.');
+    if(a)lines.push('Current signal on '+a.label+' is '+a.signal+' at '+a.score+'% strength, streak '+a.streak+'.');
+    return lines.join(' ');
+  },
   paperOn(){ if(!state.paper){$('swPaper').classList.add('on');updatePaper();} },
   paperOff(){ if(state.paper){$('swPaper').classList.remove('on');updatePaper();} },
   pauseTrading(){ if(!state.stopped) toggleStop(); },

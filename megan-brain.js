@@ -704,6 +704,33 @@ Return JSON only:
     function tryCommand(t) {
         if (/pick|choose|recommend|best strategy|which strategy|what strategy/.test(t) && /strateg|mode/.test(t)) { recommendMode(); return true; }
         if (/\bexplain\b|what('s| is) happening|what are you seeing|talk me through/.test(t)) { explainChart(); return true; }
+        // FIX (Megan) — "she's supposed to log in/out once I command it,
+        // using saved details": genuinely missing before — connect/disconnect
+        // now exist on the adapter (see index.html), wired here the same
+        // deterministic way as every other control so this doesn't depend
+        // on the AI relay guessing what she's allowed to do.
+        if (/\b(log ?in|connect|reconnect)\b/.test(t) && !/disconnect|log ?out/.test(t)) {
+            if (has('isConnected') && call('isConnected')) { speak('Already connected.'); return true; }
+            if (has('connect')) {
+                const r = call('connect');
+                if (r === 'no-saved-credentials') speak('I don\'t have saved login details for any broker yet — you\'ll need to log in manually once, then I can do it from here on.');
+                else speak('Logging in with your saved details.');
+            } else speak('I don\'t have a connect control in this bot.');
+            return true;
+        }
+        if (/\b(log ?out|disconnect|sign out)\b/.test(t)) {
+            if (has('disconnect')) { const r = call('disconnect'); speak(r === 'already-disconnected' ? 'Already disconnected.' : 'Logged out.'); }
+            else speak('I don\'t have a disconnect control in this bot.');
+            return true;
+        }
+        // FIX (Megan) — "she should tell me when news is about to happen and
+        // give me the right direction": reads the same Economic Calendar
+        // countdown and live signal already on screen — nothing invented.
+        if (/\bnews\b/.test(t) && /(when|coming|about to|upcoming|direction|bias)/.test(t)) {
+            if (has('getNewsContext')) { const ctx = call('getNewsContext'); speak(ctx); }
+            else speak('This bot hasn\'t given me a way to read the news calendar.');
+            return true;
+        }
         if (/\barm\b/.test(t) && !/disarm/.test(t)) { if (has('arm')) { call('arm'); speak('Armed.'); } else speak('I don\'t have arm/disarm control in this bot.'); return true; }
         if (/\bdisarm\b/.test(t)) { if (has('disarm')) { call('disarm'); speak('Disarmed.'); } else speak('I don\'t have that control here.'); return true; }
         if (/paper (on|mode on)|turn on paper/.test(t)) { if (has('paperOn')) { call('paperOn'); speak('Paper mode on.'); } else speak('No paper mode in this bot.'); return true; }
