@@ -193,10 +193,25 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 .news-item .impact.high{color:var(--red); border:1px solid var(--red); background:rgba(255,0,51,0.08);}
 .news-item .impact.medium{color:var(--gold); border:1px solid var(--gold); background:rgba(255,215,0,0.08);}
 .news-item .impact.low{color:var(--green); border:1px solid var(--green); background:rgba(0,255,136,0.08);}
+.hidden{display:none !important;}
 </style>
 </head>
 <body>
 <div id="app">
+
+<div id="voiceCaption" class="hidden" style="position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 10px);transform:translateX(-50%);z-index:210;max-width:88vw;padding:8px 14px;border-radius:10px;background:rgba(10,10,15,0.75);backdrop-filter:blur(6px);border:1px solid rgba(0,240,255,0.3);color:#e8e8f0;font-family:'Rajdhani',sans-serif;font-size:12px;line-height:1.4;text-align:center;pointer-events:none;transition:opacity .25s;"></div>
+
+<div id="meganFab" onclick="toggleMeganPanel()" style="position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);right:10px;z-index:211;width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,#1a1a25,#0f0f15);border:1px solid var(--cyan);display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 0 12px rgba(0,240,255,0.25);">
+  <span id="meganFabDot" style="width:9px;height:9px;border-radius:50%;background:var(--dim);"></span>
+</div>
+
+<div id="meganPanel" class="hidden" style="position:fixed;top:calc(env(safe-area-inset-top,0px) + 54px);right:10px;z-index:211;width:220px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;font-family:'Rajdhani',sans-serif;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,0.5);">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><b style="color:var(--cyan);letter-spacing:1px;">MEGAN</b><span id="meganMicState" style="font-size:10px;color:var(--dim);">MIC OFF</span></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--line);"><span>Mic</span><div class="switch" id="swMeganMic" onclick="toggleMeganMic()"></div></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--line);"><span>Voice</span><div class="switch on" id="swMeganSound" onclick="toggleMeganSound()"></div></div>
+  <div style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px;font-size:11px;color:var(--dim);">Just talk — say "Megan" isn't needed, she's always listening once the mic's on.</div>
+</div>
+
 <div id="pullIndicator" style="position:absolute; top:env(safe-area-inset-top,0px); left:0; right:0; text-align:center; font-size:12px; color:var(--dim); height:0; overflow:hidden; transition:height .15s; display:flex; align-items:center; justify-content:center; z-index:40; background:var(--bg); pointer-events:none;">&#8595; Pull to refresh</div>
 
 <!-- SPLASH -->
@@ -218,7 +233,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
   </div>
   <div class="splash-title">TRADE PORT EA</div>
   <div class="splash-desc">A cutting-edge mobile trading platform designed to empower traders with a secure, reliable, and user-friendly environment for running their automated trading systems. Seamlessly manage your Expert Advisors (EAs) on the go.</div>
-  <button class="splash-btn" onclick="showScreen('broker')">START NOW</button>
+  <button class="splash-btn" onclick="meganOnStartNow()">START NOW</button>
 </div>
 
 <!-- BROKER SELECT -->
@@ -483,6 +498,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 <!-- LOADING OVERLAY -->
 <div id="loadingOverlay" class="loading-overlay" onclick="hideLoading();log('Loading screen dismissed manually.');"><div class="spinner"></div><p id="loadingText">Connecting...</p><p style="font-size:11px; color:var(--dim); margin-top:10px;">Tap anywhere to cancel</p></div>
 
+<script src="megan-brain.js"></script>
 <script>
 
 // ========== PROTOCOL CONSTANTS ==========
@@ -522,7 +538,7 @@ let state={
   assets:{},currentSymbol:'XAUUSD',symbolsByNorm:{},pendingTrendbarRequests:{},
   bnSockets:{},bnRelayUrl:'http://localhost:8788',bnApiKey:'',bnApiSecret:'',
   chart:null,candleSeries:null,chartData:[],lastChartUpdate:0,
-  newsEvents:[],nextEvent:null,newsMode:false,newsBlackout:false
+  newsEvents:[],nextEvent:null,newsMode:false,newsBlackout:false,meganAuto:false
 };
 
 let cfg={
@@ -551,7 +567,7 @@ const STRATEGY_PRESETS={
   // proportional profit-lock trailing as every other strategy — same
   // mechanism, same code path, just with the distinctive always-flip-
   // direction-on-close behavior layered on top.
-  flip:{tf:1,slDollars:8,basketProfit:10,cooldownSec:2,maxHoldMin:1440,hint:'M1, $8 stop, $10 take-profit (edit either — roughly 1:1.25). Profit Protection trails and locks in gains the same way it does for every other strategy. Always alternates BUY/SELL on close.'},
+  flip:{tf:1,slDollars:8,basketProfit:10,cooldownSec:2,maxHoldMin:5,hint:'M1, $8 stop, $10 take-profit (edit either — roughly 1:1.25). Profit Protection trails and locks in gains the same way it does for every other strategy. Always alternates BUY/SELL on close.'},
   confluence:{hint:'Trend + momentum + RSI + spread, scored 0-100 — uses whatever Timeframe/SL/etc you set below.'},
   emaRide:{hint:'Uses the Timeframe below for EMA5/13/89. No fixed take-profit — Basket Profit is ignored, it exits on a trend flip instead.'},
   emaPullback:{slDollars:15,basketProfit:22.5,hint:'Uses the Timeframe below for EMA5/13/89. Basket Profit auto-set to 1.5x your SL (the "1:1.5" target) — edit either if you want a different ratio.'}
@@ -1275,6 +1291,7 @@ function onSpot(p){
   if(!state.paused&&!state.stopped&&state.auto&&!state.newsBlackout)maybeTrade(a);
   if(state.newsTrading&&state.newsMode)newsBreakoutCheck(a);
   updateChart(a,a.lastPrice,Date.now());updateDash();
+  if(a.key===state.currentSymbol)meganAutoTick(a);
 }
 function updateBars(a,price,now){
   const min=Math.floor(now/60000)*60000;
@@ -1290,7 +1307,7 @@ function bnSubscribe(a){
   const sock=new WebSocket(url);
   sock.onopen=()=>log('Stream: '+a.label);
   sock.onmessage=ev=>{let w;try{w=JSON.parse(ev.data);}catch(e){return;}const msg=w.data||w;
-    if(msg.e==='bookTicker'){a.bid=parseFloat(msg.b);a.ask=parseFloat(msg.a);a.lastPrice=(a.bid+a.ask)/2;updateBars(a,a.lastPrice,Date.now());computeIndicators(a);computeSignal(a);if(a.positions.length){updatePositions(a);checkExits(a);checkTrail(a);if(!state.paused&&!state.stopped&&state.auto)maybeAddStackLeg(a);}if(!state.paused&&!state.stopped&&state.auto&&!state.newsBlackout)maybeTrade(a);if(state.newsTrading&&state.newsMode)newsBreakoutCheck(a);updateChart(a,a.lastPrice,Date.now());updateDash();}
+    if(msg.e==='bookTicker'){a.bid=parseFloat(msg.b);a.ask=parseFloat(msg.a);a.lastPrice=(a.bid+a.ask)/2;updateBars(a,a.lastPrice,Date.now());computeIndicators(a);computeSignal(a);if(a.positions.length){updatePositions(a);checkExits(a);checkTrail(a);if(!state.paused&&!state.stopped&&state.auto)maybeAddStackLeg(a);}if(!state.paused&&!state.stopped&&state.auto&&!state.newsBlackout)maybeTrade(a);if(state.newsTrading&&state.newsMode)newsBreakoutCheck(a);updateChart(a,a.lastPrice,Date.now());updateDash();if(a.key===state.currentSymbol)meganAutoTick(a);}
     else if(msg.e==='kline'&&msg.k){const k=msg.k;const bar={t:Number(k.t),o:parseFloat(k.o),h:parseFloat(k.h),l:parseFloat(k.l),c:parseFloat(k.c),v:parseFloat(k.v||0)};if(!a.bars1.length||a.bars1[a.bars1.length-1].t!==bar.t)a.bars1.push(bar);else a.bars1[a.bars1.length-1]=bar;if(a.bars1.length>3000)a.bars1.shift();buildHigher(a);computeIndicators(a);computeSignal(a);updateDash();}
   };
   sock.onerror=()=>log(a.label+' stream error');
@@ -1480,8 +1497,17 @@ function maybeTrade(a){
   // else below and deliberately skips the streak/signal gate, since the
   // whole point is reacting immediately, not waiting for reconfirmation.
   if(a.forceNextSide&&!a.positions.length){
-    const side=a.forceNextSide;a.forceNextSide=null;
-    executeTrade(a,side);
+    // FIX #10 ("flip fires once then sits forever"): this used to clear
+    // a.forceNextSide unconditionally, then call executeTrade(). If that
+    // attempt was rejected for any transient, self-correcting reason — the
+    // in-flight order lock still cooling down, the symbol not quite loaded,
+    // a momentary sanity-check block — the queued reversal was thrown away
+    // with no way back in, and the whole flip cycle just stopped dead after
+    // exactly one round, with nothing in the log to explain why. Now it only
+    // clears once executeTrade() confirms the order actually went out;
+    // otherwise it stays queued and simply retries on the very next tick.
+    const side=a.forceNextSide;
+    if(executeTrade(a,side))a.forceNextSide=null;
     return;
   }
   if(cfg.strategy==='flip'){
@@ -1539,7 +1565,7 @@ function executeTrade(a,side){
   // a simple in-flight lock: once a real order is sent, block further real
   // entries on this asset until either the fill confirms (cleared in onExec)
   // or 8s pass with no response (self-heals if an event is ever dropped).
-  if(!state.paper&&a.orderPending&&Date.now()-a.orderPendingAt<8000)return;
+  if(!state.paper&&a.orderPending&&Date.now()-a.orderPendingAt<8000)return false;
   const now=Date.now();a.lastTradeAt=now;
   // FIX: this used to log "SELL 1/3 0.01 on XAU/USD" unconditionally, even
   // when paperOpen()/realOpen() had just refused the trade (e.g. LIVE NOT
@@ -1551,6 +1577,9 @@ function executeTrade(a,side){
   if(!state.paper&&!ok){a.orderPending=false;} // local rejection (not-loaded/sanity-check) — no event will ever arrive to clear it
   if(ok)log(side+' 1/'+cfg.posPerEntry+' '+cfg.lotSize+' on '+a.label+(cfg.posPerEntry>1?' (adds more as it proves itself, +0.5R per leg)':''));
   updateDash();
+  return ok; // FIX #10 — see forceNextSide consumer above: caller needs to
+  // know whether this actually went through before clearing a queued
+  // Flip/Scalping reversal, or a transient failure loses it forever.
 }
 function maybeAddStackLeg(a){
   if(!a.positions.length||a.positions.length>=cfg.posPerEntry)return;
@@ -2135,6 +2164,133 @@ if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');
 renderSymbolList();
 const rd=$('ctRedirectDisplay');if(rd)rd.textContent=ctRedirectUri();
 checkOAuthCallback().then(handled=>{ if(!handled) showScreen('splash'); });
+
+/* ================================================================
+   MEGAN — same portable brain/voice module as the other bot
+   (megan-brain.js, unmodified), wired to THIS app's own real
+   controls via window.MeganBotAdapter. Nothing below invents its
+   own entry/SL/TP prices — her autonomous trades go through this
+   app's own executeTrade(), so she gets the exact same SL/TP/lot
+   sizing, spread check, and live-arm block every manual and
+   built-in-auto trade already gets. She only ever decides
+   direction, never price levels.
+   ================================================================ */
+window.MeganBotAdapter = {
+  describe(){ return 'Trade Port EA — a cTrader/Binance forex and crypto bot with a built-in confluence/EMA signal engine across several strategy presets.'; },
+
+  getStatus(){
+    const a=state.assets[state.currentSymbol];
+    const bal=state.paper?state.paperBalance:state.balance;
+    return 'Balance is $'+(bal||0).toFixed(2)+'. '+(a&&a.positions.length?a.positions.length+' position'+(a.positions.length===1?'':'s')+' open on '+a.label:'No positions open.')+' Trading is '+(state.stopped?'stopped':(state.auto?'running on auto':'manual')) +', strategy is '+STRATEGY_LABELS[cfg.strategy]+'.';
+  },
+
+  getChartContext(){
+    const a=state.assets[state.currentSymbol];if(!a)return null;
+    const lines=[];
+    lines.push('Pair: '+a.label+', live price '+(a.lastPrice?a.lastPrice.toFixed(a.full?a.full.digits:5):'n/a'));
+    lines.push('Signal: '+a.signal+', strength '+a.score+'%, streak '+a.streak);
+    const sb=$('sessionBadge');if(sb)lines.push(sb.textContent);
+    lines.push('Strategy: '+STRATEGY_LABELS[cfg.strategy]);
+    if(a.positions.length)lines.push(a.positions.length+' open position(s), floating P/L $'+(a.floatingPnL||0).toFixed(2));
+    return lines.join('\n');
+  },
+
+  arm(){ if(!state.armed) toggleArm(); },
+  disarm(){ if(state.armed){$('swArm').classList.remove('on');state.armed=false;saveCreds();} },
+  paperOn(){ if(!state.paper){$('swPaper').classList.add('on');updatePaper();} },
+  paperOff(){ if(state.paper){$('swPaper').classList.remove('on');updatePaper();} },
+  pauseTrading(){ if(!state.stopped) toggleStop(); },
+  resumeTrading(){ if(state.stopped) toggleStop(); },
+  autoOn(){ if(!state.auto) toggleAuto(); },
+  autoOff(){ if(state.auto) toggleAuto(); },
+  aiAutoOn(){ if(!state.meganAuto){ if(!confirm('Megan will independently decide BUY/SELL/HOLD alongside your own auto-trade setting, using her own AI reasoning. Her trades still go through this app\'s real SL/TP/lot sizing and the live-arm block — she never sets her own price levels. Continue?'))return; state.meganAuto=true; updateMeganPanelUI(); } },
+  aiAutoOff(){ state.meganAuto=false; updateMeganPanelUI(); },
+  buy(){ manualTrade('BUY'); },
+  sell(){ manualTrade('SELL'); },
+  closePosition(){ closeAll(); },
+
+  listModes(){ return Object.values(STRATEGY_LABELS); },
+  setMode(label){
+    const key=Object.keys(STRATEGY_LABELS).find(k=>STRATEGY_LABELS[k].toLowerCase()===String(label).toLowerCase());
+    if(!key)return false;
+    $('cfgStrategy').value=key;applyStrategyPreset();cfg.strategy=key;saveConfig();
+    return true;
+  },
+
+  listRiskSettings(){ return [{key:'dailyLossLimit',label:'daily loss limit'},{key:'lotSize',label:'lot size'},{key:'maxSpreadPct',label:'max spread'}]; },
+  setRiskSetting(key,value){
+    if(key==='dailyLossLimit'){cfg.dailyLossLimit=value;$('cfgLossStop').value=value;}
+    else if(key==='lotSize'){cfg.lotSize=value;$('cfgLot').value=value;}
+    else if(key==='maxSpreadPct'){cfg.maxSpreadPct=value;$('cfgSpread').value=value;}
+    else return false;
+    saveConfig();return true;
+  }
+};
+
+function toggleMeganPanel(){ $('meganPanel').classList.toggle('hidden'); }
+function updateMeganPanelUI(){
+  const micOn = $('swMeganMic').classList.contains('on');
+  $('meganMicState').textContent = micOn ? 'LISTENING' : 'MIC OFF';
+  $('meganFabDot').style.background = micOn ? 'var(--green)' : 'var(--dim)';
+}
+function toggleMeganMic(){
+  const sw=$('swMeganMic'); const on=!sw.classList.contains('on');
+  sw.classList.toggle('on',on);
+  if(window.Megan&&Megan.voice)Megan.voice.setMic(on);
+  updateMeganPanelUI();
+}
+function toggleMeganSound(){
+  const sw=$('swMeganSound'); const on=!sw.classList.contains('on');
+  sw.classList.toggle('on',on);
+  if(window.Megan&&Megan.voice)Megan.voice.setSound(on);
+}
+
+// The Start Now tap is the one real user-gesture we get to both grant mic
+// permission and unlock speech playback — everything below runs from
+// inside that same click handler for that reason.
+function meganOnStartNow(){
+  try{
+    $('swMeganMic').classList.add('on'); updateMeganPanelUI();
+    if(window.Megan&&Megan.voice){ Megan.voice.setMic(true); Megan.voice.greet(); }
+  }catch(e){}
+  // Auto-advance straight to the dashboard if credentials are already
+  // saved — same connectCT()/connectBN() the manual button calls, so it
+  // gets identical safety checks (live-arm block, demo/live handling).
+  // Paper/Arm state itself is never changed here, only which screen you
+  // land on.
+  const hasCt = !!localStorage.getItem('tpea_ct_id');
+  const hasBn = !!localStorage.getItem('tpea_bn_key');
+  if(hasCt){ chooseBroker('ctrader'); connectCT(); }
+  else if(hasBn){ chooseBroker('binance'); connectBN(); }
+  else showScreen('broker');
+}
+
+let meganLastAutoTick=0, meganAutoPendingAt=0;
+async function meganAutoTick(a){
+  if(!state.meganAuto||state.stopped||!window.Megan||!a||!a.dataReady)return;
+  const now=Date.now();
+  if(now-meganLastAutoTick<25000)return; // don't hammer the relay
+  if(a.positions.length)return; // one decision at a time, same as the built-in engine's own gate
+  if(cfg.dailyLossLimit>0&&state.todayPnl<=-Math.abs(cfg.dailyLossLimit))return; // same daily-stop the app itself enforces
+  meganLastAutoTick=now;
+  const ctx=window.MeganBotAdapter.getChartContext();
+  try{
+    const reply=await Megan.answer(
+      'Given ONLY the real data below, decide BUY, SELL, or HOLD for this pair right now. '+
+      'Reply with just the word on the first line, then a one-sentence reason on the next line. '+
+      'You are choosing a direction only — stop-loss, take-profit, and position size are already fixed by this bot\'s own settings, not by you.\n'+ctx,
+      {research:false}
+    );
+    const lines=String(reply||'').split('\n').map(l=>l.trim()).filter(Boolean);
+    const action=(lines[0]||'').toUpperCase();
+    const reason=lines.slice(1).join(' ');
+    if(action==='BUY'||action==='SELL'){
+      if(window.Megan&&Megan.voice)Megan.voice.speak(action+' on '+a.label+' — '+reason);
+      executeTrade(a,action); // real function: real SL/TP/lot sizing, real spread + live-arm checks
+    }
+  }catch(e){ log('Megan auto: could not reach the AI relay.'); }
+}
+
 </script>
 </body>
 </html>
