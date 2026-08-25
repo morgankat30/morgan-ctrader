@@ -209,6 +209,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><b style="color:var(--cyan);letter-spacing:1px;">MEGAN</b><span id="meganMicState" style="font-size:10px;color:var(--dim);">MIC OFF</span></div>
   <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--line);"><span>Mic</span><div class="switch" id="swMeganMic" onclick="toggleMeganMic()"></div></div>
   <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--line);"><span>Voice</span><div class="switch on" id="swMeganSound" onclick="toggleMeganSound()"></div></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--line);"><span>AI Co-Pilot</span><div class="switch" id="swMeganAuto" onclick="toggleMeganAuto()"></div></div>
   <div style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px;font-size:11px;color:var(--dim);">Just talk — say "Megan" isn't needed, she's always listening once the mic's on.</div>
 </div>
 
@@ -1689,7 +1690,26 @@ function realOpen(a,side){
 function closeAllPositions(a){
   if(!a.positions.length)return;
   a.positions.forEach(pos=>{if(pos.paper)paperClose(a,pos);else realClose(a,pos);});
-  a.positions=[];a.lastCloseAt=Date.now();
+  // FIX #11 (the actual root cause of "flip fires once then sleeps
+  // forever," and quietly affected every strategy's real-trade accuracy):
+  // this used to immediately wipe a.positions=[] for EVERY position, real
+  // or paper, the instant this ran. A paper close is synchronous, so that's
+  // fine. A REAL close is NOT — realClose() only SENDS the close request;
+  // the position isn't actually gone until the broker's own EXECUTION_EVENT
+  // confirms it. And that confirmation is exactly where onExec looks up
+  // a.positions by positionId to record the realized PnL, update
+  // balance/Today P&L, and — for Flip and Scalping — queue the reversal
+  // via forceNextSide. Wiping the array immediately meant that lookup
+  // always found nothing, every single time a REAL position closed via
+  // Basket Profit or Max Hold (the two things that call this function).
+  // Balance eventually self-corrected via the periodic broker resync (FIX
+  // #9), which is why that looked fine — but Today P&L and Flip's queued
+  // reversal have no such fallback, so both silently died right here,
+  // every time. Only paper positions are cleared now; real ones stay until
+  // onExec's own confirmed removal — exactly what the single-position close
+  // button already did correctly (see closeOnePosition below).
+  a.positions=a.positions.filter(pos=>!pos.paper);
+  a.lastCloseAt=Date.now();
   updateDash();
 }
 // Closes one specific position (by asset key + index in a.positions) instead
@@ -2271,6 +2291,18 @@ function updateMeganPanelUI(){
   const micOn = $('swMeganMic').classList.contains('on');
   $('meganMicState').textContent = micOn ? 'LISTENING' : 'MIC OFF';
   $('meganFabDot').style.background = micOn ? 'var(--green)' : 'var(--dim)';
+  // FIX (Megan) — "I can't find autonomous mode / AI trading co-pilot in
+  // the AI settings icon": aiAutoOn()/aiAutoOff() and state.meganAuto
+  // already existed and worked (voice command only — "let Megan trade"),
+  // but there was genuinely no switch for it anywhere in this panel, only
+  // Mic and Voice. Added a real one, wired to the exact same confirm-once
+  // adapter calls the voice command already used.
+  $('swMeganAuto').classList.toggle('on', !!state.meganAuto);
+}
+function toggleMeganAuto(){
+  if(state.meganAuto){ state.meganAuto=false; updateMeganPanelUI(); return; }
+  if(!confirm('Megan will independently decide BUY/SELL/HOLD alongside your own auto-trade setting, using her own AI reasoning. Her trades still go through this app\'s real SL/TP/lot sizing and the live-arm block — she never sets her own price levels. Continue?'))return;
+  state.meganAuto=true; updateMeganPanelUI();
 }
 function toggleMeganMic(){
   const sw=$('swMeganMic'); const on=!sw.classList.contains('on');
