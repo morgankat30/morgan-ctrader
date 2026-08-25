@@ -1120,7 +1120,23 @@ function tfBars(a,tf){
   return tf===1?a.bars1:tf===5?a.bars5:tf===15?a.bars15:tf===30?a.bars30:tf===60?a.bars60:a.bars15;
 }
 function applySymbol(sym){if(!sym)return;const a=Object.values(state.assets).find(x=>x.symbolId===sym.symbolId);if(a)a.full=sym;}
-function applyTrader(t){if(!t)return;state.moneyDigits=t.moneyDigits||2;state.balance=t.balance/Math.pow(10,state.moneyDigits);state.equity=t.equity/Math.pow(10,state.moneyDigits);if(state.startBalance==null)state.startBalance=state.balance;updateDash();}
+function applyTrader(t){
+  if(!t)return;
+  // FIX #5 ("equity showing nothing, balance not even changing"): ProtoOATrader
+  // has no `equity` field — cTrader's own docs confirm the API only returns
+  // balance; equity must be computed client-side as balance + the live
+  // floating P&L of open positions. Reading t.equity was always reading
+  // undefined, hence the permanent $0.00 in every mode since the very start.
+  // Balance itself was also only ever fetched once at connect and never
+  // refreshed, so a win or loss never moved it. Real equity is now computed
+  // live in updateDash() from balance + floatingPnL; balance is now also
+  // adjusted locally the instant a real position closes (see onExec) instead
+  // of waiting on a fetch that never happened again.
+  state.moneyDigits=t.moneyDigits||2;
+  state.balance=t.balance/Math.pow(10,state.moneyDigits);
+  if(state.startBalance==null)state.startBalance=state.balance;
+  updateDash();
+}
 
 // ========== CHART ==========
 const CHART_TF_OPTIONS=[{m:1,l:'1m'},{m:5,l:'5m'},{m:15,l:'15m'},{m:30,l:'30m'},{m:60,l:'1H'}];
@@ -1788,6 +1804,13 @@ function onExec(p){
           const closedPos=a.positions[idx];const exit=deal.executionPrice||0; // same FIX #4 — ProtoOADeal.executionPrice is also a plain double, not 1e5-scaled
           const pnl=(closedPos.side==='BUY'?exit-closedPos.entryPrice:closedPos.entryPrice-exit)*dollarPerUnitFor(closedPos.volume);
           state.todayPnl+=pnl;if(pnl>0)state.wins++;else state.losses++;
+          // FIX #5 (continued) — move balance the instant this fires, win or
+          // lose, instead of leaving it frozen at whatever it was at connect
+          // time. Also re-request the broker's own figure a moment later to
+          // true up anything this local calc doesn't account for (commission,
+          // swap) without spamming TRADER_REQ on every single tick.
+          state.balance+=pnl;
+          setTimeout(()=>send(PT.TRADER_REQ,{ctidTraderAccountId:state.accountId}),1500);
           a.positions.splice(idx,1);a.lastCloseAt=Date.now();
           log('Closed '+closedPos.side+' PnL '+fmtPnL(pnl));
           if(cfg.strategy==='flip'){
@@ -1949,6 +1972,14 @@ function renderSessionBadge(){
 function updateDash(){
   resetDaily();
   renderSessionBadge();
+  // FIX #5 (continued) — equity = balance + floating P&L of every open real
+  // position, across all assets, recomputed every call so it moves live with
+  // the market instead of sitting frozen.
+  if(!state.paper){
+    let floatSum=0;
+    Object.values(state.assets).forEach(x=>{floatSum+=(x.floatingPnL||0);});
+    state.equity=state.balance+floatSum;
+  }
   const a=state.assets[state.currentSymbol];if(!a)return;
   const totalPnL=a.floatingPnL+(state.paper?0:state.todayPnl);
   const el=$('dashPnl');if(el){el.textContent=fmtPnL(totalPnL);el.className='pnl-big '+(totalPnL>=0?'pos':'neg');}
