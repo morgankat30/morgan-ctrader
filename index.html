@@ -1119,7 +1119,22 @@ function volumeFor(a, lots){
   const raw=lots*lotSize;
   return Math.max(minVol, Math.round(raw/step)*step);
 }
-function dollarPerUnitFor(volumeInBrokerUnits){ return volumeInBrokerUnits/100; } // same convention cTrader itself uses (volume is already "in cents")
+function dollarPerUnitFor(volumeInBrokerUnits,a){
+  const base=volumeInBrokerUnits/100; // same convention cTrader itself uses (volume is already "in cents")
+  // FIX #12 ("USDJPY putting a lot of amount on 0.01 lot"): this returned
+  // the same flat conversion for every symbol, which is only correct when
+  // the pair is quoted directly in USD (EURUSD, GBPUSD, XAUUSD...). USDJPY,
+  // USDCHF and USDCAD have USD as the BASE currency, not the quote — their
+  // P&L actually accrues in JPY/CHF/CAD, not USD, and has to be converted
+  // at the pair's own live rate. Treating it as flat USD massively inflated
+  // every dollar-based SL/TP/basket-profit calculation for exactly those
+  // three pairs (off by roughly the exchange rate itself, ~150x for JPY)
+  // while leaving USD-quoted pairs like GBPUSD and Gold correct — which
+  // matches exactly what was reported.
+  const USD_BASE_PAIRS={USDJPY:1,USDCHF:1,USDCAD:1};
+  if(a&&a.key&&USD_BASE_PAIRS[a.key]&&a.lastPrice)return base/a.lastPrice;
+  return base;
+}
 function digitsFor(a){ return a.full && a.full.digits!=null ? a.full.digits : (SYM_DEFS[a.key]?SYM_DEFS[a.key].digits:5); }
 function roundToDigits(price,digits){ const s=Math.pow(10,digits); return Math.round(price*s)/s; }
 function fetchHistory(id,attempt){
@@ -1609,7 +1624,7 @@ function maybeAddStackLeg(a){
 // was wrong, the actual dollar risk this produces could never runaway,
 // because it's validated against your own stated intent every single time.
 function sanityCheckTrade(a, vol, slDist){
-  const dollarPerUnit=dollarPerUnitFor(vol);
+  const dollarPerUnit=dollarPerUnitFor(vol,a);
   if(!Number.isFinite(dollarPerUnit)||dollarPerUnit<=0)return 'volume calc invalid';
   const impliedRisk=slDist*dollarPerUnit;
   const intended=cfg.slDollars;
@@ -1637,7 +1652,7 @@ function paperOpen(a,side){
     log('Cannot trade '+a.label+': lot size not ready yet (volume calc came back '+vol+'). Try again in a moment.');
     return false;
   }
-  const slDist=cfg.slDollars/dollarPerUnitFor(vol);
+  const slDist=cfg.slDollars/dollarPerUnitFor(vol,a);
   const problem=sanityCheckTrade(a,vol,slDist);
   if(problem){log('Blocked '+a.label+' trade: '+problem+'.');return false;}
   const sl=side==='BUY'?entry-slDist:entry+slDist;
@@ -1672,14 +1687,34 @@ function realOpen(a,side){
     // field. The previous version here sent an absolute price and would very
     // likely have been rejected or misinterpreted by the broker.
     const digits=digitsFor(a);
-    const slDist=cfg.slDollars/dollarPerUnitFor(vol);
+    const slDist=cfg.slDollars/dollarPerUnitFor(vol,a);
     // Same real-money-critical guard as paperOpen — see sanityCheckTrade() for
     // why this is validated against your own stated intent (cfg.slDollars)
     // rather than trusting the broker's raw fields blindly.
     const problem=sanityCheckTrade(a,vol,slDist);
     if(problem){log('Blocked '+a.label+' REAL order: '+problem+'.');return false;}
     const relSL=Math.round(slDist*100000);
-    send(PT.NEW_ORDER_REQ,{ctidTraderAccountId:state.accountId,symbolId:symId,orderType:1,tradeSide:side==='BUY'?1:2,volume:vol,relativeStopLoss:relSL,label:'SXU'});
+    // FIX #13 ("TP should always land at or above what I set, not $0.37,
+    // $0.17..."): Basket Profit was only ever enforced by this client
+    // polling floatingPnL on each price tick and THEN sending a separate
+    // CLOSE_POSITION_REQ once it noticed the target was crossed — a real
+    // round trip (detect → request → broker processes) during which price
+    // can keep moving, especially on faster symbols. That gap is exactly
+    // why closes landed under the target as often as over it. Now the
+    // target is also sent to the broker itself as a real take-profit at
+    // order time (relativeTakeProfit, same 1/100000 scale as the stop-loss
+    // above) — the broker's own matching engine closes it right at that
+    // price with no client round-trip in between, so it converges on
+    // "exactly what I set, or better" the way a real take-profit order
+    // should, the same way MT5's server-side TP behaves. The client-side
+    // Basket Profit check still exists too (it also has to sum MULTIPLE
+    // stacked legs, which a single order-level TP can't do), so this is a
+    // second, faster line of defense on top of it, not a replacement.
+    const tpDist=cfg.basketProfit>0?cfg.basketProfit/dollarPerUnitFor(vol,a):0;
+    const relTP=tpDist>0?Math.round(tpDist*100000):0;
+    const orderPayload={ctidTraderAccountId:state.accountId,symbolId:symId,orderType:1,tradeSide:side==='BUY'?1:2,volume:vol,relativeStopLoss:relSL,label:'SXU'};
+    if(relTP>0)orderPayload.relativeTakeProfit=relTP;
+    send(PT.NEW_ORDER_REQ,orderPayload);
     return true;
   }else{
     bnCall('/api/binance/order',{symbol:a.bnSymbol,side:side==='BUY'?'BUY':'SELL',type:'MARKET',quantity:cfg.lotSize.toString()});
@@ -1723,7 +1758,7 @@ function closeOnePosition(symKey,idx){
 }
 
 function paperClose(a,pos){
-  const exit=a.lastPrice;const pnl=(pos.side==='BUY'?exit-pos.entryPrice:pos.entryPrice-exit)*dollarPerUnitFor(pos.volume);
+  const exit=a.lastPrice;const pnl=(pos.side==='BUY'?exit-pos.entryPrice:pos.entryPrice-exit)*dollarPerUnitFor(pos.volume,a);
   state.paperBalance+=pnl;state.todayPnl+=pnl;
   if(pnl>0)state.wins++;else state.losses++;
   log('Paper close '+pos.side+' PnL '+fmtPnL(pnl));
@@ -1750,7 +1785,7 @@ function realClose(a,pos){
 
 function updatePositions(a){
   let total=0;a.positions.forEach(p=>{
-    const pnl=(p.side==='BUY'?a.lastPrice-p.entryPrice:p.entryPrice-a.lastPrice)*dollarPerUnitFor(p.volume);
+    const pnl=(p.side==='BUY'?a.lastPrice-p.entryPrice:p.entryPrice-a.lastPrice)*dollarPerUnitFor(p.volume,a);
     p.floatingPnL=pnl;total+=pnl;
     if(pnl>p.peakPnL)p.peakPnL=pnl;
   });
@@ -1809,7 +1844,7 @@ function checkTrail(a){
   const digits=digitsFor(a);
   a.positions.forEach(p=>{
     if(!p.paper)return;
-    const dollarPerUnit=dollarPerUnitFor(p.volume);
+    const dollarPerUnit=dollarPerUnitFor(p.volume,a);
     if(dollarPerUnit<=0)return;
     // Profit-lock ratcheting is optional (cfg.profitProtect) — but the basic
     // stop-loss hit check below is NOT optional and always runs regardless.
@@ -1901,7 +1936,7 @@ function onExec(p){
         // field as-is with no scaling.
         const entry=pos.price||0;
         if(!a.positions.some(x=>x.positionId===pos.positionId)){
-          a.positions.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:null,takeProfit:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false,initialRisk:cfg.slDollars/dollarPerUnitFor(pos.tradeData.volume)});
+          a.positions.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:null,takeProfit:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false,initialRisk:cfg.slDollars/dollarPerUnitFor(pos.tradeData.volume,a)});
         }
         log('Filled '+side+' '+a.label+' @ '+entry.toFixed(digits));
         updateDash();
@@ -1914,7 +1949,7 @@ function onExec(p){
         const idx=a.positions.findIndex(x=>x.positionId===deal.positionId);
         if(idx>=0){
           const closedPos=a.positions[idx];const exit=deal.executionPrice||0; // same FIX #4 — ProtoOADeal.executionPrice is also a plain double, not 1e5-scaled
-          const pnl=(closedPos.side==='BUY'?exit-closedPos.entryPrice:closedPos.entryPrice-exit)*dollarPerUnitFor(closedPos.volume);
+          const pnl=(closedPos.side==='BUY'?exit-closedPos.entryPrice:closedPos.entryPrice-exit)*dollarPerUnitFor(closedPos.volume,a);
           state.todayPnl+=pnl;if(pnl>0)state.wins++;else state.losses++;
           // FIX #9 (continued) — instant local bump for immediate visual
           // feedback (so the number moves right away, not frozen), then
@@ -2161,7 +2196,7 @@ function renderPositionsPanel(){
   panel.innerHTML=rows.map(({a,p,idx})=>{
     const pnl=p.floatingPnL||0;
     const digits=digitsFor(a);
-    const notional=Math.abs(p.entryPrice*dollarPerUnitFor(p.volume))||1;
+    const notional=Math.abs(p.entryPrice*dollarPerUnitFor(p.volume,a))||1;
     const pnlPct=(pnl/notional)*100;
     const lots=(p.volume/lotSizeFor(a)).toFixed(2);
     return '<div class="pos-row">'
