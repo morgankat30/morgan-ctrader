@@ -850,14 +850,14 @@ function connectCT(){
     state.ws.onopen=null;state.ws.onmessage=null;state.ws.onclose=null;state.ws.onerror=null;
     try{state.ws.close();}catch(e){}
     state.ws=null;
-    clearInterval(state.hbTimer);
+    clearInterval(state.hbTimer);clearInterval(state.balanceSyncTimer);
     setTimeout(()=>connectCTOpen(),400); // let the server actually process the close before reopening
     return;
   }
   connectCTOpen();
 }
 function connectCTOpen(){
-  clearInterval(state.hbTimer);
+  clearInterval(state.hbTimer);clearInterval(state.balanceSyncTimer);
   state.clientId=$('ctId').value.trim();state.clientSecret=$('ctSec').value.trim();state.accessToken=$('ctTok').value.trim();state.env=$('ctEnv').value;
   if(!state.clientId||!state.clientSecret||!state.accessToken){state.connecting=false;setConnectBtnEnabled(true);alert('Client ID, Client Secret and Access Token are all required.');return;}
   saveCreds();showLoading('Connecting to cTrader...');
@@ -873,12 +873,18 @@ function connectCTOpen(){
     ctStatus('Connected. Authorizing application...');
     send(PT.APP_AUTH_REQ,{clientId:state.clientId,clientSecret:state.clientSecret});
     state.hbTimer=setInterval(()=>send(PT.HEARTBEAT,{}),20000);
+    // FIX #9 (continued) — a gentle periodic true-up, independent of any
+    // close this bot personally saw, so balance can't quietly drift from
+    // the real broker figure over a long session (commission, swap, or
+    // anything else outside this bot's own view of things).
+    clearInterval(state.balanceSyncTimer);
+    state.balanceSyncTimer=setInterval(()=>{if(!state.pendingBalanceCheck)send(PT.TRADER_REQ,{ctidTraderAccountId:state.accountId});},60000);
   };
   ws.onmessage=ev=>{if(state.ws!==ws)return;state.lastMsgAt=Date.now();let m;try{m=JSON.parse(ev.data);}catch(e){return;}handleCT(m);};
   ws.onclose=ev=>{
     if(state.ws!==ws)return;
     state.connected=false;state.accountReady=false;
-    clearInterval(state.hbTimer);
+    clearInterval(state.hbTimer);clearInterval(state.balanceSyncTimer);
     setConnBadge('DISCONNECTED','off');
     state.connecting=false;setConnectBtnEnabled(true);hideLoading();
     if(!state.wasEverConnected){ctStatus('Connection closed before finishing (code '+ev.code+'). Check your Client ID/Secret/Access Token are correct and try again.');}
@@ -1133,20 +1139,45 @@ function tfBars(a,tf){
 function applySymbol(sym){if(!sym)return;const a=Object.values(state.assets).find(x=>x.symbolId===sym.symbolId);if(a)a.full=sym;}
 function applyTrader(t){
   if(!t)return;
-  // FIX #5 ("equity showing nothing, balance not even changing"): ProtoOATrader
-  // has no `equity` field — cTrader's own docs confirm the API only returns
-  // balance; equity must be computed client-side as balance + the live
-  // floating P&L of open positions. Reading t.equity was always reading
-  // undefined, hence the permanent $0.00 in every mode since the very start.
-  // Balance itself was also only ever fetched once at connect and never
-  // refreshed, so a win or loss never moved it. Real equity is now computed
-  // live in updateDash() from balance + floatingPnL; balance is now also
-  // adjusted locally the instant a real position closes (see onExec) instead
-  // of waiting on a fetch that never happened again.
+  // FIX #9 ("balance looks hardcoded / doesn't match the real broker
+  // balance"): the previous fix went local-only to stop the wrong revert
+  // bug, but that meant the bot's own balance could drift away from the
+  // REAL broker balance over time — anything the local pnl math doesn't
+  // capture exactly (commission, a trade the bot didn't personally see)
+  // never gets corrected, and the two screenshots proved it: broker showed
+  // $9462.17, bot showed $9458.46, at the same moment. You're right that
+  // the broker has to be the source of truth. This is now hybrid: the
+  // instant a real close fires, the local estimate still updates immediately
+  // (so the number visibly moves right away, not frozen), but this — the
+  // broker's own authoritative TRADER_RES reply — always wins and overwrites
+  // it once it arrives. The retry logic below (see requestBalanceReconcile)
+  // just makes sure we don't ask before the broker's own backend has
+  // actually caught up with the close, instead of the old single 1.5s ask
+  // that used to catch it too early and revert to a stale pre-close number.
   state.moneyDigits=t.moneyDigits||2;
-  state.balance=t.balance/Math.pow(10,state.moneyDigits);
+  const brokerBalance=t.balance/Math.pow(10,state.moneyDigits);
+  if(state.pendingBalanceCheck){
+    const pc=state.pendingBalanceCheck;
+    if(brokerBalance===pc.preCloseBalance&&pc.attempt<4){
+      state.pendingBalanceCheck={preCloseBalance:pc.preCloseBalance,attempt:pc.attempt+1};
+      setTimeout(()=>send(PT.TRADER_REQ,{ctidTraderAccountId:state.accountId}),2000);
+    }else{
+      state.pendingBalanceCheck=null;
+      state.balance=brokerBalance;
+    }
+  }else{
+    state.balance=brokerBalance;
+  }
   if(state.startBalance==null)state.startBalance=state.balance;
   updateDash();
+}
+// FIX #9 (continued) — called right after a real close so we know a
+// balance change is coming; polls TRADER_REQ every 2s (up to 4 times) until
+// the broker's own figure actually differs from what it was before the
+// close, so the authoritative number is trusted only once it's real.
+function requestBalanceReconcile(preCloseBalance){
+  state.pendingBalanceCheck={preCloseBalance,attempt:0};
+  setTimeout(()=>send(PT.TRADER_REQ,{ctidTraderAccountId:state.accountId}),2000);
 }
 
 // ========== CHART ==========
@@ -1836,16 +1867,15 @@ function onExec(p){
           const closedPos=a.positions[idx];const exit=deal.executionPrice||0; // same FIX #4 — ProtoOADeal.executionPrice is also a plain double, not 1e5-scaled
           const pnl=(closedPos.side==='BUY'?exit-closedPos.entryPrice:closedPos.entryPrice-exit)*dollarPerUnitFor(closedPos.volume);
           state.todayPnl+=pnl;if(pnl>0)state.wins++;else state.losses++;
-          // FIX #7 ("balance is stuck, never moves"): the change above did
-          // update state.balance locally, but this immediately scheduled a
-          // TRADER_REQ resync 1.5s later — and this demo backend's own
-          // balance figure lags well behind an actual close, so that resync
-          // was silently overwriting the correct local number with the
-          // stale pre-close one a moment later. You'd never see the local
-          // update because it got reverted before you looked. Balance is
-          // now purely local-ledger (same approach Today P&L already uses
-          // successfully) — no more silent revert.
+          // FIX #9 (continued) — instant local bump for immediate visual
+          // feedback (so the number moves right away, not frozen), then
+          // hand off to requestBalanceReconcile() which polls the broker's
+          // own TRADER_RES until it actually reflects the close and lets
+          // that real figure win — see FIX #9 above for why a single blind
+          // resync (the old FIX #7) wasn't good enough and what changed.
+          const preCloseBalance=state.balance;
           state.balance+=pnl;
+          requestBalanceReconcile(preCloseBalance);
           a.positions.splice(idx,1);a.lastCloseAt=Date.now();
           log('Closed '+closedPos.side+' PnL '+fmtPnL(pnl));
           // FIX #8 ("flip made $0.85 and stopped" / "scalping should flip
