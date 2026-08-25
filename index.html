@@ -353,6 +353,9 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
       <div class="stat-box"><div class="lbl">Equity</div><div class="val" id="stEq">$0.00</div></div>
       <div class="stat-box"><div class="lbl">Today P&L</div><div class="val" id="stToday">$0.00</div></div>
     </div>
+    <div class="stat-row" style="grid-template-columns:1fr;">
+      <div class="stat-box"><div class="lbl">Floating P&L (Open Positions)</div><div class="val" id="stFloat">$0.00</div></div>
+    </div>
 
     <!-- OPEN POSITIONS (live, MT5-style) -->
     <div class="section-title">Open Positions</div>
@@ -1441,7 +1444,19 @@ function maybeTrade(a){
     executeTrade(a,a.signal!=='WAIT'?a.signal:'BUY');
     return;
   }
-  if(!a.dataReady||a.signal==='WAIT'||a.streak<2)return;
+  // FIX #6 ("scalping fires a whole candle late"): this required the signal
+  // to hold across TWO full closed candles (streak>=2) before entering, for
+  // every strategy — including Scalping, whose whole preset (tf:1, 5s
+  // cooldown) is built to react fast. On a 1-minute chart that guarantees
+  // the entry lands on the 3rd candle after the signal first appeared,
+  // which is exactly the "signal on candle 2, fired on candle 3, market
+  // already reversing" lag you saw. Scalping now only needs the signal to
+  // be true on its first candle — the same immediate, event-triggered
+  // timing the EMA strategies already use above. Day/Swing/Position/
+  // Confluence keep the original 2-candle confirmation since those are
+  // meant to be more conservative, slower-timeframe styles.
+  const streakNeeded=cfg.strategy==='scalping'?1:2;
+  if(!a.dataReady||a.signal==='WAIT'||a.streak<streakNeeded)return;
   const now=Date.now();
   if(a.lastCloseAt&&now-a.lastCloseAt<cfg.cooldownSec*1000)return;
   if(a.lastTradeAt&&now-a.lastTradeAt<cfg.cooldownSec*1000)return;
@@ -1974,11 +1989,13 @@ function updateDash(){
   renderSessionBadge();
   // FIX #5 (continued) — equity = balance + floating P&L of every open real
   // position, across all assets, recomputed every call so it moves live with
-  // the market instead of sitting frozen.
+  // the market instead of sitting frozen. Same floatTotal now also feeds the
+  // new Floating P&L stat box (works for both real and paper — updatePositions()
+  // already keeps a.floatingPnL current for whichever mode is active).
+  let floatTotal=0;
+  Object.values(state.assets).forEach(x=>{floatTotal+=(x.floatingPnL||0);});
   if(!state.paper){
-    let floatSum=0;
-    Object.values(state.assets).forEach(x=>{floatSum+=(x.floatingPnL||0);});
-    state.equity=state.balance+floatSum;
+    state.equity=state.balance+floatTotal;
   }
   const a=state.assets[state.currentSymbol];if(!a)return;
   const totalPnL=a.floatingPnL+(state.paper?0:state.todayPnl);
@@ -1987,6 +2004,7 @@ function updateDash(){
   setText('stBalLbl',state.paper?'Balance (Paper)':'Balance ('+(state.env==='live'?'Live':'Demo')+')');
   setText('stEq',fmt$(state.equity));
   setText('stToday',fmtPnL(state.todayPnl));
+  const floatEl=$('stFloat');if(floatEl){floatEl.textContent=fmtPnL(floatTotal);floatEl.className='val '+(floatTotal>=0?'pos':'neg');}
   setText('sigPrice',a.lastPrice?a.lastPrice.toFixed(a.full?a.full.digits:5):'-');
   const sig=$('sigText');if(sig){sig.textContent=a.signal;sig.className='sig '+a.signal;}
   setText('sigScore','Signal strength: '+a.score+'% | Streak: '+a.streak);
