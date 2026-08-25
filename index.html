@@ -1757,7 +1757,21 @@ function onExec(p){
         a.orderPending=false; // confirmed — release the in-flight lock from executeTrade()
         const digits=digitsFor(a);
         const side=pos.tradeData.tradeSide===1?'BUY':'SELL';
-        const entry=pos.price?pos.price/1e5:0;
+        // FIX #4 (the "Filled BUY @ 0.05" bug / instant-close-at-fake-profit):
+        // ProtoOAPosition.price and ProtoOADeal.executionPrice are `optional
+        // double` per cTrader's own proto — real, already-scaled prices like
+        // 4644.93, not 1/100000-scaled integers. Only a few OTHER fields
+        // (SPOT_EVENT bid/ask, trendbar OHLC) use that integer scaling, which
+        // is why those still divide by 1e5 correctly elsewhere in this file.
+        // Applying that same /1e5 to this field turned a real entry price of
+        // 4644.93 into ~0.05, so checkExits/checkTrail compared the CURRENT
+        // real price against that near-zero entryPrice, saw an enormous fake
+        // floating profit, and closed the position within the same second it
+        // opened — matching exactly what you saw (fires, closes, balance
+        // never visibly moves because the "profit" was never real to begin
+        // with). Confirmed against the reference bot, which also takes this
+        // field as-is with no scaling.
+        const entry=pos.price||0;
         if(!a.positions.some(x=>x.positionId===pos.positionId)){
           a.positions.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:null,takeProfit:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false,initialRisk:cfg.slDollars/dollarPerUnitFor(pos.tradeData.volume)});
         }
@@ -1771,7 +1785,7 @@ function onExec(p){
       if(a){
         const idx=a.positions.findIndex(x=>x.positionId===deal.positionId);
         if(idx>=0){
-          const closedPos=a.positions[idx];const exit=deal.executionPrice?deal.executionPrice/1e5:0;
+          const closedPos=a.positions[idx];const exit=deal.executionPrice||0; // same FIX #4 — ProtoOADeal.executionPrice is also a plain double, not 1e5-scaled
           const pnl=(closedPos.side==='BUY'?exit-closedPos.entryPrice:closedPos.entryPrice-exit)*dollarPerUnitFor(closedPos.volume);
           state.todayPnl+=pnl;if(pnl>0)state.wins++;else state.losses++;
           a.positions.splice(idx,1);a.lastCloseAt=Date.now();
@@ -1813,8 +1827,8 @@ function applyReconcileFor(a){
     if(local.positionId==null){kept.push(local);return;} // paper / not-yet-confirmed — leave as-is
     const pos=byId[local.positionId];
     if(pos){
-      local.stopLoss=pos.stopLoss?pos.stopLoss/1e5:local.stopLoss;
-      local.takeProfit=pos.takeProfit?pos.takeProfit/1e5:local.takeProfit;
+      local.stopLoss=pos.stopLoss||local.stopLoss; // same FIX #4 — ProtoOAPosition.stopLoss/takeProfit are plain doubles too
+      local.takeProfit=pos.takeProfit||local.takeProfit;
       local.volume=pos.tradeData.volume;
       kept.push(local);
       delete byId[local.positionId];
@@ -1823,8 +1837,8 @@ function applyReconcileFor(a){
   });
   Object.values(byId).forEach(pos=>{ // broker has these open but we didn't locally — the actual "catch up" case
     const side=pos.tradeData.tradeSide===1?'BUY':'SELL';
-    const entry=pos.price?pos.price/1e5:0;
-    kept.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:pos.stopLoss?pos.stopLoss/1e5:null,takeProfit:pos.takeProfit?pos.takeProfit/1e5:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false});
+    const entry=pos.price||0; // same FIX #4
+    kept.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:pos.stopLoss||null,takeProfit:pos.takeProfit||null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false});
     log('Recovered open '+side+' position on '+(a.label||'')+' from the broker — resuming management.');
   });
   a.positions=kept;
