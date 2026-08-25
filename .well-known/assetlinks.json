@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "io.github.morgankat30.twa",
+        "sha256_cert_fingerprints": ["D1:4A:C1:A6:4D:F8:AF:DC:86:6C:47:71:FA:DB:94:0E:22:41:58:9D:1E:31:89:3F:25:28:98:BF:90:BC:B8:A2"]
+      }
+    }]
