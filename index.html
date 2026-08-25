@@ -443,6 +443,10 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
       <div><label>Max Hold (min)</label><input id="cfgHold" type="number" min="1" max="60" value="5"></div>
       <div><label>Max Spread %</label><input id="cfgSpread" type="number" step="0.01" min="0.01" value="0.5"></div>
     </div>
+    <div class="row2">
+      <div><label>Stop at profit ($, 0=off)</label><input id="cfgProfitStop" type="number" step="1" min="0" value="0"></div>
+      <div><label>Stop at loss ($, 0=off)</label><input id="cfgLossStop" type="number" step="1" min="0" value="0"></div>
+    </div>
     <div class="tog" style="margin-top:10px;">
       <div><b>Auto-Reverse</b><small>Flip direction on close</small></div>
       <div class="switch on" id="swReverse" onclick="this.classList.toggle('on')"></div>
@@ -525,7 +529,7 @@ let cfg={
   strategy:'confluence',
   lotSize:0.01,posPerEntry:3,maxPositions:0,basketProfit:5,cooldownSec:60,
   tf:15,slDollars:15,trailBuffer:2,maxHoldMin:5,maxSpreadPct:0.5,
-  autoReverse:true,profitProtect:true
+  autoReverse:true,profitProtect:true,dailyProfitTarget:0,dailyLossLimit:0
 };
 // Presets just auto-fill the same fields every strategy already uses — you can
 // still edit any of them by hand afterward. EMA Ride/Pullback additionally
@@ -705,6 +709,8 @@ function loadConfigUI(){
   $('cfgTrail').value=cfg.trailBuffer;
   $('cfgHold').value=cfg.maxHoldMin;
   $('cfgSpread').value=cfg.maxSpreadPct;
+  $('cfgProfitStop').value=cfg.dailyProfitTarget;
+  $('cfgLossStop').value=cfg.dailyLossLimit;
   $('swReverse').classList.toggle('on',cfg.autoReverse);
   $('swProtect').classList.toggle('on',cfg.profitProtect);
   $('swNewsTrade').classList.toggle('on',state.newsTrading);
@@ -723,6 +729,8 @@ function saveConfig(){
   cfg.trailBuffer=parseFloat($('cfgTrail').value)||2;
   cfg.maxHoldMin=parseInt($('cfgHold').value)||5;
   cfg.maxSpreadPct=parseFloat($('cfgSpread').value)||0.5;
+  cfg.dailyProfitTarget=parseFloat($('cfgProfitStop').value)||0;
+  cfg.dailyLossLimit=parseFloat($('cfgLossStop').value)||0;
   cfg.autoReverse=$('swReverse').classList.contains('on');
   cfg.profitProtect=$('swProtect').classList.contains('on');
   state.newsTrading=$('swNewsTrade').classList.contains('on');
@@ -972,7 +980,7 @@ function applyBNAccount(acct){if(!acct||acct.error)return;if(acct.balances){cons
 // ========== ASSET INIT ==========
 function initAsset(){
   const sym=state.currentSymbol;const def=SYM_DEFS[sym];if(!def)return;
-  if(!state.assets[sym])state.assets[sym]={key:sym,label:def.label,name:def.name,symbolId:null,full:null,lastPrice:0,bid:null,ask:null,bars1:[],bars5:[],bars15:[],bars30:[],bars60:[],currentBar:null,dataReady:false,positions:[],signal:'WAIT',score:0,streak:0,lastDir:'WAIT',lastTradeAt:0,lastCloseAt:0,floatingPnL:0,emaFast:null,emaSlow:null,emaTrend:null,rsi:null,atr:null,momentum:0,orderPending:false,orderPendingAt:0};
+  if(!state.assets[sym])state.assets[sym]={key:sym,label:def.label,name:def.name,symbolId:null,full:null,lastPrice:0,bid:null,ask:null,bars1:[],bars5:[],bars15:[],bars30:[],bars60:[],currentBar:null,dataReady:false,positions:[],signal:'WAIT',score:0,streak:0,lastDir:'WAIT',lastTradeAt:0,lastCloseAt:0,floatingPnL:0,emaFast:null,emaSlow:null,emaTrend:null,rsi:null,atr:null,momentum:0,orderPending:false,orderPendingAt:0,forceNextSide:null};
   const a=state.assets[sym];a.bnSymbol=def.bn;
   setText('sigPair',def.label+' - '+def.name);
   setText('robotMeta',STRATEGY_LABELS[cfg.strategy]+' &bull; '+def.label+' &bull; '+(state.auto?'Auto':'Manual'));
@@ -1431,12 +1439,24 @@ function checkEmaTrendFlipExit(a){
 
 // ========== TRADING LOGIC ==========
 function maybeTrade(a){
+  // FIX #8 (continued) — consume a queued forced re-entry (Flip's every
+  // cycle, Scalping's same-candle reversal after a profitable close) as
+  // soon as this tick sees the position slot is actually empty. This is the
+  // "next tick" half of FIX #8 above: no setTimeout, no dependency on the
+  // tab being foregrounded at a specific instant — it just fires the moment
+  // a real price tick comes through and a.positions is clear, same as every
+  // other trade decision in this function. Takes priority over everything
+  // else below and deliberately skips the streak/signal gate, since the
+  // whole point is reacting immediately, not waiting for reconfirmation.
+  if(a.forceNextSide&&!a.positions.length){
+    const side=a.forceNextSide;a.forceNextSide=null;
+    executeTrade(a,side);
+    return;
+  }
   if(cfg.strategy==='flip'){
-    // Flip's re-entries are driven entirely by its own close event (see
-    // paperClose/onExec below) — it always deliberately trades the OPPOSITE
-    // side of whatever it just closed, not whatever the confluence signal
-    // currently reads. This function's only job for Flip is the very first
-    // entry, before any cycle has started.
+    // Flip's normal re-entries are queued via a.forceNextSide above, driven
+    // by its own close event (see paperClose/onExec). This branch now only
+    // has to handle the very first entry, before any cycle has started.
     if(!a.dataReady||a.positions.length||a.flipStarted)return;
     const now=Date.now();
     if(a.lastTradeAt&&now-a.lastTradeAt<cfg.cooldownSec*1000)return;
@@ -1628,14 +1648,11 @@ function paperClose(a,pos){
   if(pnl>0)state.wins++;else state.losses++;
   log('Paper close '+pos.side+' PnL '+fmtPnL(pnl));
   if(cfg.strategy==='flip'){
-    // Flip always re-enters the OPPOSITE side of whatever it just closed —
-    // not whatever the live confluence signal currently says. That's the
-    // literal "buy, close in profit, immediately sell, close in profit,
-    // immediately buy" cycle that was asked for.
-    const nextSide=pos.side==='BUY'?'SELL':'BUY';
-    if(!state.paused&&!state.stopped&&state.auto){
-      setTimeout(()=>{if(!state.paused&&!state.stopped&&state.auto)executeTrade(a,nextSide);},Math.max(500,cfg.cooldownSec*1000));
-    }
+    // Same FIX #8 as the real-close handler — queue it for the next tick
+    // instead of a one-shot setTimeout that a backgrounded tab can drop.
+    a.forceNextSide=pos.side==='BUY'?'SELL':'BUY';
+  }else if(cfg.strategy==='scalping'&&pnl>0){
+    a.forceNextSide=pos.side==='BUY'?'SELL':'BUY';
   }else if(cfg.autoReverse&&a.signal!=='WAIT'&&a.signal!==pos.side){
     setTimeout(()=>{if(!state.paused&&!state.stopped&&state.auto)executeTrade(a,a.signal);},500);
   }
@@ -1819,22 +1836,38 @@ function onExec(p){
           const closedPos=a.positions[idx];const exit=deal.executionPrice||0; // same FIX #4 — ProtoOADeal.executionPrice is also a plain double, not 1e5-scaled
           const pnl=(closedPos.side==='BUY'?exit-closedPos.entryPrice:closedPos.entryPrice-exit)*dollarPerUnitFor(closedPos.volume);
           state.todayPnl+=pnl;if(pnl>0)state.wins++;else state.losses++;
-          // FIX #5 (continued) — move balance the instant this fires, win or
-          // lose, instead of leaving it frozen at whatever it was at connect
-          // time. Also re-request the broker's own figure a moment later to
-          // true up anything this local calc doesn't account for (commission,
-          // swap) without spamming TRADER_REQ on every single tick.
+          // FIX #7 ("balance is stuck, never moves"): the change above did
+          // update state.balance locally, but this immediately scheduled a
+          // TRADER_REQ resync 1.5s later — and this demo backend's own
+          // balance figure lags well behind an actual close, so that resync
+          // was silently overwriting the correct local number with the
+          // stale pre-close one a moment later. You'd never see the local
+          // update because it got reverted before you looked. Balance is
+          // now purely local-ledger (same approach Today P&L already uses
+          // successfully) — no more silent revert.
           state.balance+=pnl;
-          setTimeout(()=>send(PT.TRADER_REQ,{ctidTraderAccountId:state.accountId}),1500);
           a.positions.splice(idx,1);a.lastCloseAt=Date.now();
           log('Closed '+closedPos.side+' PnL '+fmtPnL(pnl));
+          // FIX #8 ("flip made $0.85 and stopped" / "scalping should flip
+          // instantly on a profitable close, same candle"): both of these
+          // used to schedule their re-entry with a one-shot setTimeout
+          // buried in here. If the tab wasn't actively in the foreground at
+          // the exact moment that timer fired — extremely easy on mobile,
+          // and exactly what happens if you glance away right after a close
+          // — the browser can throttle or simply never run it, and the
+          // whole cycle just stops dead with no error, no retry, nothing.
+          // Flip's very next entry then had NO other path back in (its
+          // maybeTrade() gate was one-shot too — see FIX #8 below). Instead
+          // of scheduling a timer, this now just records what should happen
+          // next (a.forceNextSide) and lets it fire on the next real price
+          // tick, off the same loop that already drives every other trade —
+          // no floating timer to lose track of, so it survives backgrounding.
           if(cfg.strategy==='flip'){
-            // Same forced-alternation rule as paperClose — always the
-            // opposite side of what just closed, regardless of signal.
-            const nextSide=closedPos.side==='BUY'?'SELL':'BUY';
-            if(!state.paused&&!state.stopped&&state.auto){
-              setTimeout(()=>{if(!state.paused&&!state.stopped&&state.auto)executeTrade(a,nextSide);},Math.max(500,cfg.cooldownSec*1000));
-            }
+            a.forceNextSide=closedPos.side==='BUY'?'SELL':'BUY';
+          }else if(cfg.strategy==='scalping'&&pnl>0){
+            // Only on a PROFITABLE close, per what was asked — a losing
+            // scalp does not force an immediate opposite entry.
+            a.forceNextSide=closedPos.side==='BUY'?'SELL':'BUY';
           }else if(cfg.autoReverse&&a.signal!=='WAIT'&&a.signal!==closedPos.side&&!state.paused&&!state.stopped&&state.auto){
             setTimeout(()=>executeTrade(a,a.signal),500);
           }
@@ -1894,6 +1927,22 @@ function toggleStop(){
   state.stopped=!state.stopped;
   $('btnStop').classList.toggle('stop-active',state.stopped);
   if(state.stopped){closeAll();log('STOPPED - All closed');}else{log('RESTARTED');}
+}
+// FIX ("let me type the profit/loss I want it to stop at"): checked every
+// updateDash() call (i.e. every price tick), against state.todayPnl — the
+// same realized-only running total the Today P&L box already shows. 0
+// disables either side. One-shot: only fires while not already stopped, so
+// it doesn't refire every tick once triggered, and RESTART (the same STOP
+// button, tapped again) re-arms it for the rest of the session.
+function checkDailyStopLimits(){
+  if(state.stopped)return;
+  if(cfg.dailyProfitTarget>0&&state.todayPnl>=cfg.dailyProfitTarget){
+    state.stopped=true;$('btnStop').classList.add('stop-active');closeAll();
+    log('AUTO-STOP: daily profit target of $'+cfg.dailyProfitTarget.toFixed(2)+' reached ('+fmtPnL(state.todayPnl)+'). All closed.');
+  }else if(cfg.dailyLossLimit>0&&state.todayPnl<=-Math.abs(cfg.dailyLossLimit)){
+    state.stopped=true;$('btnStop').classList.add('stop-active');closeAll();
+    log('AUTO-STOP: daily loss limit of $'+cfg.dailyLossLimit.toFixed(2)+' reached ('+fmtPnL(state.todayPnl)+'). All closed.');
+  }
 }
 // FIX: this used to be a full location.reload() — which is exactly what
 // produced "it jumps back to the main page in the middle of a trade": an
@@ -1987,6 +2036,7 @@ function renderSessionBadge(){
 function updateDash(){
   resetDaily();
   renderSessionBadge();
+  checkDailyStopLimits();
   // FIX #5 (continued) — equity = balance + floating P&L of every open real
   // position, across all assets, recomputed every call so it moves live with
   // the market instead of sitting frozen. Same floatTotal now also feeds the
