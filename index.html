@@ -588,7 +588,7 @@ let tvChart=null, candleSeries=null, emaLine1=null, emaLine2=null, emaLine3=null
 
 // ========== HELPERS ==========
 const $=id=>document.getElementById(id);
-function showScreen(id){
+function showScreen(id,fromPopstate){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   if(id==='splash')$('scrSplash').classList.add('active');
   else if(id==='broker')$('scrBroker').classList.add('active');
@@ -614,7 +614,22 @@ function showScreen(id){
   }
   else if(id==='symbols')$('scrSymbols').classList.add('active');
   else if(id==='config')$('scrConfig').classList.add('active');
+  // FIX #15 ("the phone's back button doesn't go back to the login page —
+  // it just leaves the app"): none of these in-app screen changes were ever
+  // recorded in browser history, so Android's hardware/gesture back button
+  // had nothing of ours to step back through — it just closed the whole
+  // app instead. Every real showScreen() call now pushes a history entry;
+  // a popstate handler below (installed once) reads it back out and calls
+  // showScreen() again with fromPopstate=true so this doesn't re-push and
+  // create an infinite loop of entries.
+  if(!fromPopstate){
+    try{history.pushState({tpeaScreen:id},'','');}catch(e){}
+  }
 }
+window.addEventListener('popstate',(e)=>{
+  const id=e.state&&e.state.tpeaScreen;
+  if(id)showScreen(id,true);
+});
 function log(msg){
   const el=$('miniLog');if(!el)return;
   const t=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
@@ -780,6 +795,9 @@ function renderSymbolList(){
     if(closed)div.style.opacity='0.5';
     div.innerHTML='<div class="info"><div class="sym">'+def.label+(closed?' <span style="color:var(--gold); font-size:10px;">CLOSED (weekend)</span>':def.weekend?' <span style="color:var(--green); font-size:10px;">24/7</span>':'')+'</div><div class="detail">'+def.name+' &bull; Lot '+cfg.lotSize+'</div></div><div class="check">'+(active?'&#10003;':'')+'</div>';
     div.onclick=()=>{
+      // FIX #14 (continued) — deactivate every other tracked asset first,
+      // so only the one you're actually switching to stays live.
+      Object.keys(state.assets).forEach(k=>{if(k!==key)deactivateAsset(k);});
       state.currentSymbol=key;initAsset();renderSymbolList();showScreen('config');loadConfigUI();
       // Actually subscribe/load data for the newly picked symbol (see fix note
       // on activateCtSymbol above) — this used to silently do nothing.
@@ -1003,8 +1021,9 @@ function applyBNAccount(acct){if(!acct||acct.error)return;if(acct.balances){cons
 // ========== ASSET INIT ==========
 function initAsset(){
   const sym=state.currentSymbol;const def=SYM_DEFS[sym];if(!def)return;
-  if(!state.assets[sym])state.assets[sym]={key:sym,label:def.label,name:def.name,symbolId:null,full:null,lastPrice:0,bid:null,ask:null,bars1:[],bars5:[],bars15:[],bars30:[],bars60:[],currentBar:null,dataReady:false,positions:[],signal:'WAIT',score:0,streak:0,lastDir:'WAIT',lastTradeAt:0,lastCloseAt:0,floatingPnL:0,emaFast:null,emaSlow:null,emaTrend:null,rsi:null,atr:null,momentum:0,orderPending:false,orderPendingAt:0,forceNextSide:null};
+  if(!state.assets[sym])state.assets[sym]={key:sym,label:def.label,name:def.name,symbolId:null,full:null,lastPrice:0,bid:null,ask:null,bars1:[],bars5:[],bars15:[],bars30:[],bars60:[],currentBar:null,dataReady:false,positions:[],signal:'WAIT',score:0,streak:0,lastDir:'WAIT',lastTradeAt:0,lastCloseAt:0,floatingPnL:0,emaFast:null,emaSlow:null,emaTrend:null,rsi:null,atr:null,momentum:0,orderPending:false,orderPendingAt:0,forceNextSide:null,tradingEnabled:true};
   const a=state.assets[sym];a.bnSymbol=def.bn;
+  a.tradingEnabled=true; // FIX #14 (continued) — re-selecting a previously deactivated symbol reactivates it
   setText('sigPair',def.label+' - '+def.name);
   setText('robotMeta',STRATEGY_LABELS[cfg.strategy]+' &bull; '+def.label+' &bull; '+(state.auto?'Auto':'Manual'));
 }
@@ -1320,6 +1339,7 @@ function bnSubscribe(a){
   if(!a.bnSymbol)return;const host=state.env==='live'?'wss://stream.binance.com:9443':'wss://stream.testnet.binance.vision:9443';
   const s=a.bnSymbol.toLowerCase();const url=host+'/stream?streams='+s+'@bookTicker/'+s+'@kline_1m';
   try{if(state.bnSockets[a.key]&&state.bnSockets[a.key].readyState<=1)state.bnSockets[a.key].close();}catch(e){}
+  a.unsubscribed=false; // FIX #14 (see deactivateAsset below) — (re)subscribing always clears this
   const sock=new WebSocket(url);
   sock.onopen=()=>log('Stream: '+a.label);
   sock.onmessage=ev=>{let w;try{w=JSON.parse(ev.data);}catch(e){return;}const msg=w.data||w;
@@ -1327,8 +1347,39 @@ function bnSubscribe(a){
     else if(msg.e==='kline'&&msg.k){const k=msg.k;const bar={t:Number(k.t),o:parseFloat(k.o),h:parseFloat(k.h),l:parseFloat(k.l),c:parseFloat(k.c),v:parseFloat(k.v||0)};if(!a.bars1.length||a.bars1[a.bars1.length-1].t!==bar.t)a.bars1.push(bar);else a.bars1[a.bars1.length-1]=bar;if(a.bars1.length>3000)a.bars1.shift();buildHigher(a);computeIndicators(a);computeSignal(a);updateDash();}
   };
   sock.onerror=()=>log(a.label+' stream error');
-  sock.onclose=()=>{setTimeout(()=>bnSubscribe(a),1200);};
+  // FIX #14 — this always scheduled a reconnect, even for a symbol you'd
+  // deliberately switched away from. That's the literal reason a Binance
+  // pair kept trading forever no matter how many times its socket got
+  // closed: closing it wasn't enough, it just quietly reopened itself
+  // 1.2s later, on repeat. deactivateAsset() below sets a.unsubscribed
+  // before closing, so a genuinely intentional close stays closed.
+  sock.onclose=()=>{if(!a.unsubscribed)setTimeout(()=>bnSubscribe(a),1200);};
   state.bnSockets[a.key]=sock;
+}
+// FIX #14 (root cause of "the bot keeps trading pairs I already switched
+// away from" — confirmed directly by the screenshots showing LTC, XRP,
+// SOL, AUD, EUR, GBP and Gold all open and trading at once despite only
+// one symbol ever being "selected" at a time): picking a new symbol only
+// ever ADDED it to state.assets — nothing ever removed, paused, or
+// unsubscribed whatever was picked before. Every asset's live price feed
+// keeps running (Binance sockets self-reconnect forever; cTrader spot
+// subscriptions were never explicitly cancelled either), and maybeTrade()
+// is only gated by the single GLOBAL Auto switch, never by whether that
+// asset is the one currently selected — so every pair you've ever opened
+// just kept trading in the background, accumulating exactly as shown.
+// This closes that gap: switching symbols now genuinely deactivates every
+// other asset — closes its open positions (same as tapping Close All on
+// it), stops its price feed for real this time, and flags it so no
+// trading function will act on it again unless you switch back to it.
+function deactivateAsset(key){
+  const a=state.assets[key];if(!a)return;
+  a.tradingEnabled=false;
+  if(a.positions.length){log('Switched away from '+a.label+' — closing its open position(s).');closeAllPositions(a);}
+  a.unsubscribed=true;
+  try{if(state.bnSockets[key]){state.bnSockets[key].close();delete state.bnSockets[key];}}catch(e){}
+  if(state.broker==='ctrader'&&a.symbolId){
+    try{send(PT.UNSUBSCRIBE_SPOTS_REQ,{ctidTraderAccountId:state.accountId,symbolId:[a.symbolId]});}catch(e){}
+  }
 }
 async function bnSeed(a){try{const r=await bnCall('/api/binance/klines',{symbol:a.bnSymbol,interval:'1m',limit:1000});if(Array.isArray(r)){a.bars1=r.map(k=>({t:Number(k[0]),o:parseFloat(k[1]),h:parseFloat(k[2]),l:parseFloat(k[3]),c:parseFloat(k[4]),v:parseFloat(k[5]||0)}));buildHigher(a);a.dataReady=true;computeIndicators(a);if(candleSeries&&a.key===state.currentSymbol)redrawChart(true);log(a.label+' chart seeded');}}catch(e){log('Seed error: '+e.message);}}
 
@@ -1388,6 +1439,34 @@ function renderNewsList(){
   });
 }
 function startNewsEngine(){generateNewsCalendar();setInterval(checkNews,1000);checkNews();}
+// FIX (requested feature: "close trades before midnight, but only if
+// they're actually profitable — otherwise leave them running"): checked
+// once a minute. Fires once during the 11:55pm-11:59pm local window each
+// day (the lastRunDate guard stops it firing repeatedly every tick inside
+// that window, or again after midnight has already passed), closing only
+// the positions that are currently in floating profit on each asset —
+// losing or breakeven positions are left exactly as they are, untouched.
+let midnightCloseLastRunDate=null;
+function checkMidnightProfitClose(){
+  const now=new Date();
+  const dateKey=now.getFullYear()+'-'+now.getMonth()+'-'+now.getDate();
+  if(now.getHours()!==23||now.getMinutes()<55)return;
+  if(midnightCloseLastRunDate===dateKey)return;
+  midnightCloseLastRunDate=dateKey;
+  let closedAny=false;
+  Object.values(state.assets).forEach(a=>{
+    a.positions.slice().forEach(pos=>{
+      if((pos.floatingPnL||0)>0){
+        closedAny=true;
+        if(pos.paper){paperClose(a,pos);a.positions=a.positions.filter(x=>x!==pos);}
+        else realClose(a,pos); // real removal still waits for the broker's own confirmation, same as every other real close in this app
+      }
+    });
+  });
+  if(closedAny)log('Midnight profit-close: closed positions currently in profit; anything in loss was left open.');
+  updateDash();
+}
+setInterval(checkMidnightProfitClose,60000);
 
 // ========== INDICATORS ==========
 function ema(v,p){if(v.length<p)return null;let e=v.slice(0,p).reduce((x,y)=>x+y,0)/p;const k=2/(p+1);for(let i=p;i<v.length;i++)e=v[i]*k+e*(1-k);return e;}
@@ -1406,7 +1485,18 @@ function rsi(v,p=14){if(v.length<=p)return null;let g=0,l=0;for(let i=1;i<=p;i++
 function atr(bars,p=14){if(bars.length<=p)return null;let tr=[];for(let i=1;i<bars.length;i++){const c=bars[i],pr=bars[i-1];tr.push(Math.max(c.h-c.l,Math.abs(c.h-pr.c),Math.abs(c.l-pr.c)));}let a=tr.slice(0,p).reduce((x,y)=>x+y,0)/p;for(let i=p;i<tr.length;i++)a=(a*(p-1)+tr[i])/p;return a;}
 
 function computeIndicators(a){
-  const c1=a.bars1.map(x=>x.c);
+  // FIX #16 ("scalping opens BUY while price is actively falling, or vice
+  // versa"): every indicator here used to read only from a.bars1 — CLOSED
+  // candles. computeSignal() genuinely does re-run on every tick, but the
+  // numbers it was reading from didn't change until the current candle
+  // actually closed — up to a full minute, on Scalping's 1m timeframe.
+  // If price reversed hard mid-candle, the signal kept reporting the
+  // *previous* candle's direction the entire time, which is exactly how a
+  // BUY signal could still be firing while the live chart was already
+  // falling. Appending the live in-progress candle's current price as the
+  // last data point makes the signal track real-time price action instead
+  // of only updating once per candle.
+  const c1=a.bars1.map(x=>x.c).concat(a.currentBar?[a.currentBar.c]:[]);
   const higherBars=tfBars(a,cfg.tf);
   const cH=higherBars.map(x=>x.c);
   a.emaFast=ema(c1,9);a.emaSlow=ema(c1,21);a.emaTrend=ema(cH,9);a.rsi=rsi(c1,14);a.atr=atr(a.bars1,14);
@@ -1503,6 +1593,10 @@ function checkEmaTrendFlipExit(a){
 
 // ========== TRADING LOGIC ==========
 function maybeTrade(a){
+  // FIX #14 (continued) — a deactivated asset (switched away from) must
+  // never open a new trade again, no matter what stray tick still reaches
+  // this function.
+  if(a.tradingEnabled===false)return;
   // FIX #8 (continued) — consume a queued forced re-entry (Flip's every
   // cycle, Scalping's same-candle reversal after a profitable close) as
   // soon as this tick sees the position slot is actually empty. This is the
@@ -1598,6 +1692,7 @@ function executeTrade(a,side){
   // Flip/Scalping reversal, or a transient failure loses it forever.
 }
 function maybeAddStackLeg(a){
+  if(a.tradingEnabled===false)return; // FIX #14 (continued)
   if(!a.positions.length||a.positions.length>=cfg.posPerEntry)return;
   const last=a.positions[a.positions.length-1];
   if(!last.initialRisk||last.initialRisk<=0)return;
