@@ -13,43 +13,7 @@
 <style>
 :root{--bg:#0a0a0f; --panel:#12121a; --panel2:#1a1a25; --line:#2a2a3a; --red:#ff0033; --red2:#ff1a1a; --cyan:#00f0ff; --green:#00ff88; --gold:#ffd700; --txt:#e8e8f0; --dim:#6b6b80;}
 *{box-sizing:border-box; -webkit-tap-highlight-color:transparent; margin:0; padding:0;}
-html{background:var(--bg);}
-body{background:transparent; color:var(--txt); font-family:'Rajdhani',sans-serif; font-size:14px; overflow:hidden; height:100vh; height:100dvh; -webkit-font-smoothing:antialiased;}
-/* Megan — live 3D body, fixed behind the whole app so she's always visible,
-   walking/idling/talking, with her captions staying on top (#voiceCaption,
-   #meganFab/#meganPanel unchanged below). */
-#meganBgLayer{position:fixed; inset:0; z-index:-2; background:radial-gradient(ellipse at 50% 38%,#0d1626 0%,#050a14 70%); pointer-events:none; overflow:hidden; display:flex; align-items:flex-end; justify-content:center;}
-#meganBgDim{position:fixed; inset:0; z-index:-1; background:linear-gradient(180deg, rgba(5,6,12,0.08) 0%, rgba(8,9,16,0.18) 55%, rgba(8,9,16,0.32) 100%); pointer-events:none;}
-#meganSvgWrap{width:min(78vw,340px); position:relative; bottom:4vh; filter:drop-shadow(0 0 26px rgba(0,212,255,0.35));}
-#meganSvgWrap svg{width:100%; height:auto; display:block; overflow:visible;}
-@keyframes meganBob{0%,100%{transform:translateY(0);} 50%{transform:translateY(-3.5%);}}
-@keyframes meganBreathe{0%,100%{transform:scaleY(1);} 50%{transform:scaleY(1.015);}}
-@keyframes meganDrift{0%,100%{transform:translateX(-9vw) rotate(-1.2deg);} 50%{transform:translateX(9vw) rotate(1.2deg);}}
-@keyframes meganEyePulse{0%,100%{opacity:1;} 50%{opacity:0.45;}}
-@keyframes meganEyePulseFast{0%,100%{opacity:1;} 50%{opacity:0.35;}}
-@keyframes meganMouthTalk{0%,100%{transform:scaleY(1);} 25%{transform:scaleY(2.6);} 50%{transform:scaleY(0.6);} 75%{transform:scaleY(3.2);}}
-@keyframes meganCorePulse{0%,100%{opacity:0.65; transform:scale(1);} 50%{opacity:1; transform:scale(1.25);}}
-@keyframes meganLegSwing{0%,100%{transform:rotate(-9deg);} 50%{transform:rotate(9deg);}}
-@keyframes meganLegSwingOpp{0%,100%{transform:rotate(9deg);} 50%{transform:rotate(-9deg);}}
-@keyframes meganArmSwing{0%,100%{transform:rotate(6deg);} 50%{transform:rotate(-6deg);}}
-@keyframes meganArmGesture{0%,100%{transform:rotate(8deg);} 50%{transform:rotate(-18deg);}}
-#meganSvgWrap{animation:meganBob 4.5s ease-in-out infinite;}
-#meganSvgWrap #mgTorso{transform-origin:50% 62%; animation:meganBreathe 3.2s ease-in-out infinite;}
-#meganSvgWrap #mgEyeL,#meganSvgWrap #mgEyeR{animation:meganEyePulse 2.6s ease-in-out infinite;}
-#meganSvgWrap #mgCore{transform-origin:center; animation:meganCorePulse 2.2s ease-in-out infinite;}
-#meganSvgWrap #mgArmL{transform-origin:50% 6%; animation:meganArmSwing 3.6s ease-in-out infinite;}
-#meganSvgWrap #mgArmR{transform-origin:50% 6%; animation:meganArmSwing 3.6s ease-in-out infinite reverse;}
-#meganSvgWrap.state-walking{animation:meganBob 4.5s ease-in-out infinite, meganDrift 11s ease-in-out infinite;}
-#meganSvgWrap.state-walking #mgLegL{transform-origin:50% 8%; animation:meganLegSwing 0.9s ease-in-out infinite;}
-#meganSvgWrap.state-walking #mgLegR{transform-origin:50% 8%; animation:meganLegSwingOpp 0.9s ease-in-out infinite;}
-#meganSvgWrap.state-walking #mgArmL{animation:meganArmSwing 0.9s ease-in-out infinite reverse;}
-#meganSvgWrap.state-walking #mgArmR{animation:meganArmSwing 0.9s ease-in-out infinite;}
-#meganSvgWrap.state-listening #mgEyeL,#meganSvgWrap.state-listening #mgEyeR{animation:meganEyePulseFast 0.9s ease-in-out infinite;}
-#meganSvgWrap.state-listening #mgTorso{animation:meganBreathe 1.4s ease-in-out infinite;}
-#meganSvgWrap.state-talking #mgMouth{transform-origin:center; animation:meganMouthTalk 0.45s ease-in-out infinite;}
-#meganSvgWrap.state-talking #mgEyeL,#meganSvgWrap.state-talking #mgEyeR{animation:meganEyePulseFast 0.6s ease-in-out infinite;}
-#meganSvgWrap.state-talking #mgArmL{animation:meganArmGesture 0.7s ease-in-out infinite;}
-#meganSvgWrap.state-talking #mgArmR{animation:meganArmGesture 0.7s ease-in-out infinite reverse;}
+body{background:var(--bg); color:var(--txt); font-family:'Rajdhani',sans-serif; font-size:14px; overflow:hidden; height:100vh; height:100dvh; -webkit-font-smoothing:antialiased;}
 h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 /* FIX: viewport-fit=cover draws content under the phone's status bar and
    bottom gesture bar with nothing padding it back out, which is why the
@@ -57,12 +21,14 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
    100dvh (with 100vh as a fallback for older browsers) also stops the
    layout being taller than what's actually visible when mobile browser
    toolbars show/hide. */
-#app{max-width:480px; margin:0 auto; height:100vh; height:100dvh; display:flex; flex-direction:column; position:relative; background:rgba(10,10,15,0.62); backdrop-filter:blur(1px); -webkit-backdrop-filter:blur(1px); box-shadow:0 0 60px rgba(0,0,0,0.5);}
+#app{max-width:480px; margin:0 auto; height:100vh; height:100dvh; display:flex; flex-direction:column; position:relative; background:rgba(10,10,15,0.62); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);}
 .screen{position:absolute; inset:0; display:none; flex-direction:column; overflow:hidden;}
 .screen.active{display:flex;}
 
 /* Splash */
-#scrSplash{justify-content:center; align-items:center; text-align:center; z-index:100; background:radial-gradient(ellipse at 50% 20%,rgba(26,10,18,0.25) 0%,rgba(10,10,15,0.4) 60%); padding:24px;}
+#scrSplash{justify-content:center; align-items:center; text-align:center; z-index:100; background:radial-gradient(ellipse at 50% 20%,#1a0a12 0%,var(--bg) 60%); padding:24px;}
+.splash-logo{width:80px; height:80px; margin:0 auto 24px; background:linear-gradient(145deg,#1a1a25,#0f0f15); border-radius:20px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(255,0,51,0.3); box-shadow:0 0 30px rgba(255,0,51,0.2);}
+.splash-logo svg{width:50px; height:50px;}
 .splash-title{font-family:'Orbitron'; font-size:20px; font-weight:900; color:#fff; letter-spacing:3px; margin-bottom:8px;}
 .splash-desc{color:var(--dim); font-size:13px; line-height:1.6; max-width:300px; margin:0 auto 32px;}
 .splash-btn{width:100%; max-width:280px; background:linear-gradient(135deg,var(--red),var(--red2)); color:#fff; border:none; border-radius:14px; padding:18px; font-family:'Orbitron'; font-size:16px; font-weight:800; letter-spacing:2px; cursor:pointer; box-shadow:0 8px 32px rgba(255,0,51,0.4);}
@@ -228,95 +194,26 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 .news-item .impact.medium{color:var(--gold); border:1px solid var(--gold); background:rgba(255,215,0,0.08);}
 .news-item .impact.low{color:var(--green); border:1px solid var(--green); background:rgba(0,255,136,0.08);}
 .hidden{display:none !important;}
+/* FIX (live 3D Megan background): fixed, full-viewport, sits BEHIND every
+   screen (z-index:0 — the lowest of anything in this app). Every .screen
+   and card surface gets a translucent background further down so she's
+   actually visible through them, the same way the earlier static photo was. */
+#meganBodyContainer{position:fixed; inset:0; z-index:0; pointer-events:none;}
+#meganBodyContainer canvas{pointer-events:none;}
 </style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
 </head>
 <body>
-<!-- FIX (Megan) — live 3D body, fixed behind the entire app so she's
-     always present/walking/idling/talking, matching how she looks in
-     the other bot; her voice captions (#voiceCaption) and mic/voice
-     panel (#meganFab/#meganPanel) stay exactly where they already are,
-     on top of everything below. -->
-<div id="meganBgLayer">
-  <div id="meganSvgWrap" class="state-idle">
-    <svg viewBox="0 0 200 340" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <filter id="mgGlow" x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation="3" result="b"/>
-          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-        </filter>
-        <linearGradient id="mgChrome" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#e8edf2"/><stop offset="55%" stop-color="#9aa7b5"/><stop offset="100%" stop-color="#4a5563"/>
-        </linearGradient>
-        <linearGradient id="mgDark" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#242e3f"/><stop offset="100%" stop-color="#0e1520"/>
-        </linearGradient>
-      </defs>
-
-      <!-- floor glow ring -->
-      <ellipse cx="100" cy="325" rx="52" ry="9" fill="none" stroke="#00d4ff" stroke-width="2" opacity="0.35" filter="url(#mgGlow)"/>
-
-      <!-- legs -->
-      <g id="mgLegL">
-        <rect x="78" y="215" width="18" height="70" rx="8" fill="url(#mgChrome)"/>
-        <circle cx="87" cy="285" r="9" fill="url(#mgDark)"/>
-        <rect x="80" y="286" width="16" height="60" rx="7" fill="url(#mgChrome)"/>
-        <rect x="74" y="316" width="28" height="12" rx="5" fill="#141c28"/>
-      </g>
-      <g id="mgLegR">
-        <rect x="104" y="215" width="18" height="70" rx="8" fill="url(#mgChrome)"/>
-        <circle cx="113" cy="285" r="9" fill="url(#mgDark)"/>
-        <rect x="106" y="286" width="16" height="60" rx="7" fill="url(#mgChrome)"/>
-        <rect x="100" y="316" width="28" height="12" rx="5" fill="#141c28"/>
-      </g>
-
-      <!-- hips -->
-      <rect x="72" y="196" width="56" height="26" rx="12" fill="url(#mgDark)"/>
-      <ellipse cx="100" cy="209" rx="20" ry="4" fill="none" stroke="#00d4ff" stroke-width="1.5" opacity="0.6"/>
-
-      <!-- torso -->
-      <g id="mgTorso">
-        <path d="M66 105 Q100 92 134 105 L130 200 Q100 212 70 200 Z" fill="url(#mgChrome)"/>
-        <rect x="86" y="120" width="28" height="18" rx="3" fill="#c99a2e" opacity="0.9"/>
-        <circle id="mgCore" cx="100" cy="150" r="7" fill="#00d4ff" filter="url(#mgGlow)"/>
-        <rect x="70" y="130" width="8" height="45" rx="3" fill="url(#mgDark)"/>
-        <rect x="122" y="130" width="8" height="45" rx="3" fill="url(#mgDark)"/>
-      </g>
-
-      <!-- arms -->
-      <g id="mgArmL">
-        <rect x="46" y="108" width="16" height="55" rx="8" fill="url(#mgChrome)"/>
-        <circle cx="54" cy="163" r="8" fill="url(#mgDark)"/>
-        <rect x="47" y="164" width="14" height="48" rx="7" fill="url(#mgChrome)"/>
-        <rect x="45" y="210" width="18" height="14" rx="6" fill="#141c28"/>
-      </g>
-      <g id="mgArmR">
-        <rect x="138" y="108" width="16" height="55" rx="8" fill="url(#mgChrome)"/>
-        <circle cx="146" cy="163" r="8" fill="url(#mgDark)"/>
-        <rect x="139" y="164" width="14" height="48" rx="7" fill="url(#mgChrome)"/>
-        <rect x="137" y="210" width="18" height="14" rx="6" fill="#141c28"/>
-      </g>
-
-      <!-- shoulders -->
-      <circle cx="66" cy="108" r="13" fill="url(#mgChrome)"/>
-      <circle cx="134" cy="108" r="13" fill="url(#mgChrome)"/>
-
-      <!-- neck + head -->
-      <rect x="92" y="72" width="16" height="18" rx="5" fill="url(#mgDark)"/>
-      <g id="mgHead">
-        <ellipse cx="100" cy="50" rx="30" ry="27" fill="url(#mgChrome)"/>
-        <path d="M75 52 Q100 74 125 52 Q125 78 100 82 Q75 78 75 52Z" fill="#101822"/>
-        <ellipse id="mgEyeL" cx="90" cy="50" rx="5" ry="5" fill="#00d4ff" filter="url(#mgGlow)"/>
-        <ellipse id="mgEyeR" cx="110" cy="50" rx="5" ry="5" fill="#00d4ff" filter="url(#mgGlow)"/>
-        <rect id="mgMouth" x="92" y="66" width="16" height="3" rx="1.5" fill="#00d4ff" filter="url(#mgGlow)"/>
-        <rect x="94" y="22" width="12" height="10" rx="3" fill="#c99a2e"/>
-        <line x1="100" y1="22" x2="100" y2="8" stroke="#1a2230" stroke-width="2"/>
-        <circle cx="100" cy="7" r="4" fill="#00d4ff" filter="url(#mgGlow)"/>
-      </g>
-    </svg>
-  </div>
-</div>
-<div id="meganBgDim"></div>
 <div id="app">
+<div id="meganBodyContainer"></div>
+<script type="module" src="megan-body.js"></script>
 
 <div id="voiceCaption" class="hidden" style="position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 10px);transform:translateX(-50%);z-index:210;max-width:88vw;padding:8px 14px;border-radius:10px;background:rgba(10,10,15,0.75);backdrop-filter:blur(6px);border:1px solid rgba(0,240,255,0.3);color:#e8e8f0;font-family:'Rajdhani',sans-serif;font-size:12px;line-height:1.4;text-align:center;pointer-events:none;transition:opacity .25s;"></div>
 
@@ -335,6 +232,9 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 <div id="pullIndicator" style="position:absolute; top:env(safe-area-inset-top,0px); left:0; right:0; text-align:center; font-size:12px; color:var(--dim); height:0; overflow:hidden; transition:height .15s; display:flex; align-items:center; justify-content:center; z-index:40; background:var(--bg); pointer-events:none;">&#8595; Pull to refresh</div>
 
 <!-- SPLASH -->
+<!-- FIX (live 3D Megan replaces the old static header robot): the splash
+     screen's own icon square is removed here — the live robot behind
+     everything now takes its place visually, per what was asked. -->
 <div id="scrSplash" class="screen active">
   <div class="splash-title">TRADE PORT EA</div>
   <div class="splash-desc">A cutting-edge mobile trading platform designed to empower traders with a secure, reliable, and user-friendly environment for running their automated trading systems. Seamlessly manage your Expert Advisors (EAs) on the go.</div>
@@ -412,11 +312,10 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 <div id="scrDash" class="screen">
   <div class="conn-status"><span id="connBadge" class="badge off">OFFLINE</span></div>
   <div class="dash-scroll" id="dashScroll">
-    <div class="robot-hero" style="height:170px;">
-      <!-- FIX (Megan) — the static SVG head that used to live here is gone;
-           this space is now left transparent on purpose so the real,
-           animated 3D Megan (fixed behind the whole app, #meganBgLayer)
-           shows through right here at the top of the dashboard. -->
+    <!-- FIX (live 3D Megan replaces the old static header robot): removed
+         the SVG icon here too — kept the title text, since that's the
+         product name, not part of the old robot graphic. -->
+    <div class="robot-hero">
       <div class="robot-title">SERIES X ULTRA AI</div>
       <div class="robot-sub">HUNDIO</div>
     </div>
@@ -1412,12 +1311,23 @@ function onSpot(p){
   const a=Object.values(state.assets).find(x=>x.symbolId===p.symbolId);if(!a)return;
   const bid=p.bid?p.bid/1e5:(a.bid||a.lastPrice||0);const ask=p.ask?p.ask/1e5:(a.ask||a.lastPrice||0);
   if(!bid&&!ask)return;a.bid=bid;a.ask=ask;a.lastPrice=(bid+ask)/2;
-  updateBars(a,a.lastPrice,Date.now());computeIndicators(a);computeSignal(a);
-  if(a.positions.length){updatePositions(a);checkExits(a);checkTrail(a);if(!state.paused&&!state.stopped&&state.auto)maybeAddStackLeg(a);}
-  if(!state.paused&&!state.stopped&&state.auto&&!state.newsBlackout)maybeTrade(a);
-  if(state.newsTrading&&state.newsMode)newsBreakoutCheck(a);
-  updateChart(a,a.lastPrice,Date.now());updateDash();
-  if(a.key===state.currentSymbol)meganAutoTick(a);
+  // FIX #18 (defensive hardening — "everything freezes forever on every
+  // pair, chart never updates, positions stuck at 0.00"): any one
+  // unexpected error anywhere in this per-tick sequence used to be able to
+  // abort the WHOLE tick silently, and — because a real bug (FIX #17
+  // above) could make the SAME step fail identically on every subsequent
+  // tick too — that looked exactly like the entire app being permanently
+  // stuck rather than one bad tick. Wrapping the sequence means a genuine
+  // future bug in any single step gets logged and skipped instead of
+  // silently freezing price, chart, and P&L updates for every asset.
+  try{
+    updateBars(a,a.lastPrice,Date.now());computeIndicators(a);computeSignal(a);
+    if(a.positions.length){updatePositions(a);checkExits(a);checkTrail(a);if(!state.paused&&!state.stopped&&state.auto)maybeAddStackLeg(a);}
+    if(!state.paused&&!state.stopped&&state.auto&&!state.newsBlackout)maybeTrade(a);
+    if(state.newsTrading&&state.newsMode)newsBreakoutCheck(a);
+    updateChart(a,a.lastPrice,Date.now());updateDash();
+    if(a.key===state.currentSymbol)meganAutoTick(a);
+  }catch(e){ if(window.console)console.error('Tick error on '+a.label+':',e); }
 }
 function updateBars(a,price,now){
   const min=Math.floor(now/60000)*60000;
@@ -1434,7 +1344,12 @@ function bnSubscribe(a){
   const sock=new WebSocket(url);
   sock.onopen=()=>log('Stream: '+a.label);
   sock.onmessage=ev=>{let w;try{w=JSON.parse(ev.data);}catch(e){return;}const msg=w.data||w;
-    if(msg.e==='bookTicker'){a.bid=parseFloat(msg.b);a.ask=parseFloat(msg.a);a.lastPrice=(a.bid+a.ask)/2;updateBars(a,a.lastPrice,Date.now());computeIndicators(a);computeSignal(a);if(a.positions.length){updatePositions(a);checkExits(a);checkTrail(a);if(!state.paused&&!state.stopped&&state.auto)maybeAddStackLeg(a);}if(!state.paused&&!state.stopped&&state.auto&&!state.newsBlackout)maybeTrade(a);if(state.newsTrading&&state.newsMode)newsBreakoutCheck(a);updateChart(a,a.lastPrice,Date.now());updateDash();if(a.key===state.currentSymbol)meganAutoTick(a);}
+    if(msg.e==='bookTicker'){
+      a.bid=parseFloat(msg.b);a.ask=parseFloat(msg.a);a.lastPrice=(a.bid+a.ask)/2;
+      try{ // FIX #18 — same defensive wrapping as onSpot above
+        updateBars(a,a.lastPrice,Date.now());computeIndicators(a);computeSignal(a);if(a.positions.length){updatePositions(a);checkExits(a);checkTrail(a);if(!state.paused&&!state.stopped&&state.auto)maybeAddStackLeg(a);}if(!state.paused&&!state.stopped&&state.auto&&!state.newsBlackout)maybeTrade(a);if(state.newsTrading&&state.newsMode)newsBreakoutCheck(a);updateChart(a,a.lastPrice,Date.now());updateDash();if(a.key===state.currentSymbol)meganAutoTick(a);
+      }catch(e){ if(window.console)console.error('Tick error on '+a.label+':',e); }
+    }
     else if(msg.e==='kline'&&msg.k){const k=msg.k;const bar={t:Number(k.t),o:parseFloat(k.o),h:parseFloat(k.h),l:parseFloat(k.l),c:parseFloat(k.c),v:parseFloat(k.v||0)};if(!a.bars1.length||a.bars1[a.bars1.length-1].t!==bar.t)a.bars1.push(bar);else a.bars1[a.bars1.length-1]=bar;if(a.bars1.length>3000)a.bars1.shift();buildHigher(a);computeIndicators(a);computeSignal(a);updateDash();}
   };
   sock.onerror=()=>log(a.label+' stream error');
@@ -1465,9 +1380,29 @@ function bnSubscribe(a){
 function deactivateAsset(key){
   const a=state.assets[key];if(!a)return;
   a.tradingEnabled=false;
-  if(a.positions.length){log('Switched away from '+a.label+' — closing its open position(s).');closeAllPositions(a);}
+  // FIX #17 (the actual cause of "everything is stuck, chart frozen,
+  // positions stuck at 0.00 forever" right after switching pairs): this
+  // sent the close request for any open positions AND cut the asset's live
+  // price feed in the same breath. A close isn't instant — it only
+  // actually finishes once the broker's own confirmation comes back, and
+  // that confirmation (along with every price update needed to keep the
+  // position's P&L moving in the meantime) rides on the exact feed this
+  // was simultaneously shutting off. The position could never actually
+  // finish closing, and its price/chart/P&L froze at whatever the last
+  // tick was — exactly what showed up as "stuck at 0.00 forever." The feed
+  // now only gets cut once this asset genuinely has zero open positions —
+  // immediately if it already has none, or automatically once its
+  // in-flight closes actually confirm (see checkExits below).
+  if(a.positions.length){
+    log('Switched away from '+a.label+' — closing its open position(s).');
+    try{closeAllPositions(a);}catch(e){log('Error closing '+a.label+': '+e.message);}
+  }else{
+    finishDeactivation(a);
+  }
+}
+function finishDeactivation(a){
   a.unsubscribed=true;
-  try{if(state.bnSockets[key]){state.bnSockets[key].close();delete state.bnSockets[key];}}catch(e){}
+  try{if(state.bnSockets[a.key]){state.bnSockets[a.key].close();delete state.bnSockets[a.key];}}catch(e){}
   if(state.broker==='ctrader'&&a.symbolId){
     try{send(PT.UNSUBSCRIBE_SPOTS_REQ,{ctidTraderAccountId:state.accountId,symbolId:[a.symbolId]});}catch(e){}
   }
@@ -2337,6 +2272,13 @@ function updateDash(){
   resetDaily();
   renderSessionBadge();
   checkDailyStopLimits();
+  // FIX #17 (continued) — sweep for any deactivated asset whose in-flight
+  // closes have now actually confirmed (positions.length just reached 0),
+  // and only NOW cut its feed. Runs every tick regardless of which asset's
+  // tick triggered it, so this can't get missed.
+  Object.values(state.assets).forEach(x=>{
+    if(x.tradingEnabled===false&&!x.positions.length&&!x.unsubscribed)finishDeactivation(x);
+  });
   // FIX #5 (continued) — equity = balance + floating P&L of every open real
   // position, across all assets, recomputed every call so it moves live with
   // the market instead of sitting frozen. Same floatTotal now also feeds the
@@ -2583,73 +2525,6 @@ async function meganAutoTick(a){
   }catch(e){ log('Megan auto: could not reach the AI relay.'); }
 }
 
-</script>
-
-<!-- ============================================================
-     MEGAN — LIVE BODY (background layer)
-     Self-contained SVG/CSS robot (no external libraries, so she
-     always renders, in any preview or on any host) fixed behind
-     the whole app (#meganBgLayer, z-index:-2), pointer-events:none.
-     Animation state is driven by CSS classes on #meganSvgWrap:
-     state-idle / state-listening / state-talking / state-walking.
-     Wired additively to the real voice system already in this bot
-     (megan-brain.js, untouched) — nothing above this script changed.
-     ============================================================ -->
-<script>
-(function(){
-  var wrap = document.getElementById('meganSvgWrap');
-  var current = 'idle';
-  var micOn = false;
-  var walkTimer = null;
-
-  function setState(s){
-    if(!wrap || current === s) return;
-    current = s;
-    wrap.classList.remove('state-idle','state-listening','state-talking','state-walking');
-    wrap.classList.add('state-' + s);
-  }
-
-  // Gentle automatic walking every so often so she's never a frozen
-  // statue — "walking side by side always" — but she always settles
-  // back to idle/listening between strolls.
-  function scheduleWalk(){
-    walkTimer = setTimeout(function(){
-      if(current !== 'talking'){
-        setState('walking');
-        setTimeout(function(){
-          if(current === 'walking') setState(micOn ? 'listening' : 'idle');
-        }, 11000);
-      }
-      scheduleWalk();
-    }, 9000 + Math.random()*6000);
-  }
-
-  function wireToMegan(){
-    try{
-      var nativeSpeak = window.speechSynthesis.speak.bind(window.speechSynthesis);
-      window.speechSynthesis.speak = function(utterance){
-        var _onstart = utterance.onstart, _onend = utterance.onend, _onerror = utterance.onerror;
-        utterance.onstart = function(e){ setState('talking'); if(_onstart) _onstart(e); };
-        utterance.onend = function(e){ setState(micOn ? 'listening' : 'idle'); if(_onend) _onend(e); };
-        utterance.onerror = function(e){ setState(micOn ? 'listening' : 'idle'); if(_onerror) _onerror(e); };
-        nativeSpeak(utterance);
-      };
-    }catch(e){}
-
-    if(window.Megan && window.Megan.voice && typeof window.Megan.voice.setMic === 'function'){
-      var origSetMic = window.Megan.voice.setMic;
-      window.Megan.voice.setMic = function(on){
-        origSetMic(on);
-        micOn = !!on;
-        if(current !== 'talking') setState(micOn ? 'listening' : 'idle');
-      };
-    }
-  }
-
-  scheduleWalk();
-  window.addEventListener('load', wireToMegan);
-  if(document.readyState === 'complete') wireToMegan();
-})();
 </script>
 </body>
 </html>
