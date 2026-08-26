@@ -917,8 +917,6 @@ Return JSON only:
 
 })(window);
 
-window.dispatchEvent(new Event('megan-ready'));
-
 
 /* MEGAN FINAL MASTER CONTRACT */
 
