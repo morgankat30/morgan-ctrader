@@ -199,35 +199,6 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
    and card surface gets a translucent background further down so she's
    actually visible through them, the same way the earlier static photo was. */
 #meganBodyContainer{position:fixed; inset:0; z-index:0; pointer-events:none;}
-/* FIX (new feature — "should change the whole bot's color... green when
-   doing well, red when doing bad"): one blend-mode overlay tints
-   everything underneath it at once (the 3D robot AND the dashboard UI),
-   so this doesn't need per-component color overrides scattered everywhere.
-   Toggled by the 'megan-mood' event megan-body.js already dispatches from
-   setMood() — see the listener near the bottom of this file's script. */
-#moodTint{position:fixed; inset:0; z-index:999; pointer-events:none; background:transparent; mix-blend-mode:screen; opacity:0; transition:opacity .6s ease, background .6s ease;}
-/* FIX ("the bot is not making the colors as we said"): two real problems
-   here. First, mix-blend-mode:overlay barely shows against this app's
-   near-black background — overlay multiplies dark pixels, so a faint
-   green/red wash over #0a0a0f stayed almost invisible. Switched to
-   "screen", which adds light instead, so the tint actually reads now.
-   Second — the bigger one — this only ever touched #moodTint and
-   #voiceCaption's border. The app's actual brand color, var(--red)
-   (#ff0033), is what every button, card accent, and glow line in this
-   whole UI is built from — 24 separate uses of it. Overriding that one
-   variable at the body level is what makes "the whole bot" shift color,
-   not just a faint background wash. Left --red alone for neutral (so the
-   app looks exactly like it always has when P&L is flat), overrides it to
-   green when doing well, and to a distinctly different, more saturated
-   red-orange with a slow pulse when doing badly — so "bad" doesn't just
-   look identical to the app's normal red branding. */
-body.mood-good{--red:#00ff66; --red2:#00ff88;}
-body.mood-bad{--red:#ff2b1a; --red2:#ff4400;}
-body.mood-good #moodTint{background:#00ff66; opacity:0.16;}
-body.mood-bad #moodTint{background:#ff2b1a; opacity:0.16; animation:moodDangerPulse 1.8s ease-in-out infinite;}
-@keyframes moodDangerPulse{0%,100%{opacity:0.10;} 50%{opacity:0.24;}}
-body.mood-good #voiceCaption{border-color:rgba(0,255,102,0.5) !important;}
-body.mood-bad #voiceCaption{border-color:rgba(255,43,26,0.55) !important;}
 #meganBodyContainer canvas{pointer-events:none;}
 </style>
 <script type="importmap">
@@ -242,7 +213,6 @@ body.mood-bad #voiceCaption{border-color:rgba(255,43,26,0.55) !important;}
 <body>
 <div id="app">
 <div id="meganBodyContainer"></div>
-<div id="moodTint"></div>
 <script type="module" src="megan-body.js"></script>
 
 <div id="voiceCaption" class="hidden" style="position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 10px);transform:translateX(-50%);z-index:210;max-width:88vw;padding:8px 14px;border-radius:10px;background:rgba(10,10,15,0.75);backdrop-filter:blur(6px);border:1px solid rgba(0,240,255,0.3);color:#e8e8f0;font-family:'Rajdhani',sans-serif;font-size:12px;line-height:1.4;text-align:center;pointer-events:none;transition:opacity .25s;"></div>
@@ -591,7 +561,7 @@ let cfg={
 // switch the whole signal engine (see computeEmaSignal); the other five all
 // run on the same trend/momentum/RSI/spread confluence engine, just tuned.
 const STRATEGY_PRESETS={
-  scalping:{tf:1,slDollars:8,basketProfit:5,cooldownSec:5,maxHoldMin:8,hint:'M1 entries, tight $8 stop, fast 5s re-entry, 8min max hold.'},
+  scalping:{tf:1,slDollars:8,basketProfit:5,cooldownSec:1,maxHoldMin:8,hint:'M1 entries, tight $8 stop, aggressive 1s re-entry, 8min max hold.'},
   // New strategy, additive only — does not touch Scalping's own code path
   // above. Same tf/SL/cooldown shape as Scalping, but the entry direction
   // is inverted: see computeScalpingTwoSignal — it reads the current
@@ -698,15 +668,6 @@ function setText(id,txt){const e=$(id);if(e)e.textContent=txt;}
 // close and a call to ensureNotifyPermission() on connect. All removed —
 // nothing here calls the Notification API anymore, and the broker's own
 // app is back to being the only thing that notifies you on a close.
-// FIX (new feature — mood color): megan-body.js's setMood() dispatches this
-// plain DOM event whenever the mood actually changes (it no-ops on repeats,
-// so this isn't firing every tick) — mirror it onto <body> as a class so
-// the CSS above (#moodTint, #voiceCaption) can react without this file and
-// megan-body.js needing to import each other.
-document.addEventListener('megan-mood',function(e){
-  document.body.classList.remove('mood-good','mood-bad','mood-neutral');
-  document.body.classList.add('mood-'+(e.detail&&e.detail.mood||'neutral'));
-});
 function fmt$(n){return '$'+(n||0).toFixed(2);}
 function fmtPnL(n){return (n>=0?'+':'')+n.toFixed(2);}
 function todayKey(){return new Date().toISOString().slice(0,10);}
@@ -2546,14 +2507,6 @@ function updateDash(){
   const a=state.assets[state.currentSymbol];if(!a)return;
   const totalPnL=a.floatingPnL+(state.paper?0:state.todayPnl);
   const el=$('dashPnl');if(el){el.textContent=fmtPnL(totalPnL);el.className='pnl-big '+(totalPnL>=0?'pos':'neg');}
-  // FIX (new feature — "when it's doing well the background robot should
-  // turn green, when doing bad turn red"): aggregate performance (today's
-  // realized + whatever's floating right now) drives her mood color. Small
-  // threshold so she doesn't flicker between colors on noise around $0.
-  if(window.MeganHologram){
-    const perf=totalPnL;
-    window.MeganHologram.setMood(perf>0.05?'good':(perf<-0.05?'bad':'neutral'));
-  }
   setText('stBal',fmt$(state.paper?state.paperBalance:state.balance));
   setText('stBalLbl',state.paper?'Balance (Paper)':'Balance ('+(state.env==='live'?'Live':'Demo')+')');
   setText('stEq',fmt$(state.equity));

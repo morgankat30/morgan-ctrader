@@ -762,25 +762,6 @@ function setState(state) {
   // it's just not also mirrored into a debug readout.
 }
 
-/* ── MOOD (new feature) ── the whole robot's glow color, tied to how the
-   bot is actually doing — green while trading is net positive, red while
-   it's net negative, back to her normal cyan otherwise. index.html calls
-   window.MeganHologram.setMood(...) from updateDash(), where it already
-   knows the real floating/today P&L. Also fires a plain DOM CustomEvent so
-   index.html's own CSS (cards, badges, borders) can shift the same way —
-   this only recolors the materials that already exist; nothing about her
-   shape or the rest of the scene changes. */
-const moodColors = { neutral: 0x00d4ff, good: 0x00ff66, bad: 0xff2b1a }; // bad matches index.html's --red override exactly
-let currentMood = 'neutral';
-function setMood(mood) {
-  if(!moodColors.hasOwnProperty(mood) || currentMood === mood) return;
-  currentMood = mood;
-  const hex = moodColors[mood];
-  [matCyanGlow, matEye, matBlueGlow].forEach(m => { if(m){ m.color.setHex(hex); m.emissive.setHex(hex); } });
-  if(parts.floorRing) parts.floorRing.material.color.setHex(hex);
-  try{ document.dispatchEvent(new CustomEvent('megan-mood', { detail: { mood } })); }catch(e){}
-}
-
 /* ── APPROACH / RETREAT (new feature) — "come closer to reply, then go
    back". Reuses the exact same walk-cycle animation as auto-wander/
    walkTo below (just a different target point), so this doesn't need its
@@ -890,7 +871,6 @@ window.MeganHologram = {
   walkTo: (x, z) => { targetPos.set(x, 0, z); isWalking = true; setState('walking'); },
   getPos: () => ({ x: megan.position.x, z: megan.position.z }),
   getState: () => currentState,
-  setMood,
   playAction,
   approachCamera,
   returnHome,
