@@ -1653,7 +1653,12 @@ function maybeTrade(a){
     // clears once executeTrade() confirms the order actually went out;
     // otherwise it stays queued and simply retries on the very next tick.
     const side=a.forceNextSide;
-    if(executeTrade(a,side))a.forceNextSide=null;
+    // FIX #20 (continued) — carry the fake-leg tag through to whichever
+    // fill handler actually builds the position object (paperOpen fills
+    // synchronously; a real fill arrives later via onExec) so it can mark
+    // that specific position, not the asset generally.
+    a.pendingIsFakeLeg=!!a.forceNextSideIsFakeLeg;
+    if(executeTrade(a,side)){a.forceNextSide=null;a.forceNextSideIsFakeLeg=false;}
     return;
   }
   if(cfg.strategy==='flip'){
@@ -1798,7 +1803,12 @@ function paperOpen(a,side){
   const problem=sanityCheckTrade(a,vol,slDist);
   if(problem){log('Blocked '+a.label+' trade: '+problem+'.');return false;}
   const sl=side==='BUY'?entry-slDist:entry+slDist;
-  a.positions.push({side,entryPrice:entry,volume:vol,stopLoss:sl,takeProfit:null,openedAt:Date.now(),paper:true,peakPnL:0,trailingActive:false,initialRisk:slDist});
+  // FIX #20 (continued) — tag this position if it was opened via the
+  // forced-reversal path, and record which candle it opened on, so
+  // checkExits below knows to hold it through a candle change instead of
+  // closing at the first profitable tick like a normal entry does.
+  const isFakeLeg=!!a.pendingIsFakeLeg;a.pendingIsFakeLeg=false;
+  a.positions.push({side,entryPrice:entry,volume:vol,stopLoss:sl,takeProfit:null,openedAt:Date.now(),paper:true,peakPnL:0,trailingActive:false,initialRisk:slDist,isFakeLeg,entryBarKey:a.currentBar?a.currentBar.t:null});
   return true;
 }
 
@@ -1908,8 +1918,19 @@ function paperClose(a,pos){
     // Same FIX #8 as the real-close handler — queue it for the next tick
     // instead of a one-shot setTimeout that a backgrounded tab can drop.
     a.forceNextSide=pos.side==='BUY'?'SELL':'BUY';
-  }else if(cfg.strategy==='scalping'&&pnl>0){
-    a.forceNextSide=pos.side==='BUY'?'SELL':'BUY';
+  }else if(cfg.strategy==='scalping'&&pnl>0&&!pos.isFakeLeg){
+    // FIX #20 ("don't flip straight back to the original side — hold the
+    // reversed side through the candle change, only flip back once THAT
+    // one is profitable too"): only the natural, signal-driven leg queues
+    // a reversal now. The reversed ("fake") leg this creates is exempt from
+    // that same trigger (see !pos.isFakeLeg) and from closing at all until
+    // checkExits below confirms a new candle has actually started — so it
+    // rides out the rest of THIS candle regardless of a brief profit dip,
+    // then closes and hands control back to normal strategy on the first
+    // profitable moment of a genuinely new candle. Nothing forces a third
+    // leg — after the fake leg closes, whichever side the live signal
+    // actually favors is what trades next, not another automatic flip.
+    a.forceNextSide=pos.side==='BUY'?'SELL':'BUY';a.forceNextSideIsFakeLeg=true;
   }else if(cfg.autoReverse&&a.signal!=='WAIT'&&a.signal!==pos.side){
     setTimeout(()=>{if(!state.paused&&!state.stopped&&state.auto)executeTrade(a,a.signal);},500);
   }
@@ -1954,11 +1975,19 @@ function updatePositions(a){
 function checkExits(a){
   if(!a.positions.length)return;
   const now=Date.now();
+  // FIX #20 (continued) — a "fake leg" (the forced reversal after a
+  // profitable scalping close) is exempt from the normal basket-profit
+  // close until the candle it opened on has actually finished — per what
+  // was asked: hold the reversed side through the rest of that candle and
+  // into the new one, THEN close it (and hand control back to normal
+  // strategy) on the first profitable moment of a genuinely new candle,
+  // rather than flipping straight back on the very next profitable tick.
+  const holdingFakeLeg=cfg.strategy==='scalping'&&a.positions.some(p=>p.isFakeLeg&&a.currentBar&&p.entryBarKey===a.currentBar.t);
   // Ride mode has no fixed profit target — see checkEmaTrendFlipExit — so skip
   // the basket-profit close for that one style only. Flip now uses this same
   // basket-profit take-profit like everything else — see the FIX note above
   // checkTrail for why its old separate exit mechanism was removed.
-  if(cfg.strategy!=='emaRide'&&a.floatingPnL>=cfg.basketProfit){log('Basket profit: '+fmtPnL(a.floatingPnL));closeAllPositions(a);return;}
+  if(cfg.strategy!=='emaRide'&&!holdingFakeLeg&&a.floatingPnL>=cfg.basketProfit){log('Basket profit: '+fmtPnL(a.floatingPnL));closeAllPositions(a);return;}
   checkEmaTrendFlipExit(a);
   if(!a.positions.length)return; // may have just been closed by one of the checks above
   // Max hold time
@@ -2078,7 +2107,10 @@ function onExec(p){
         // field as-is with no scaling.
         const entry=pos.price||0;
         if(!a.positions.some(x=>x.positionId===pos.positionId)){
-          a.positions.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:null,takeProfit:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false,initialRisk:cfg.slDollars/dollarPerUnitFor(pos.tradeData.volume,a)});
+          // FIX #20 (continued) — same tagging as paperOpen above, for a
+          // real fill.
+          const isFakeLeg=!!a.pendingIsFakeLeg;a.pendingIsFakeLeg=false;
+          a.positions.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:null,takeProfit:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false,initialRisk:cfg.slDollars/dollarPerUnitFor(pos.tradeData.volume,a),isFakeLeg,entryBarKey:a.currentBar?a.currentBar.t:null});
         }
         log('Filled '+side+' '+a.label+' @ '+entry.toFixed(digits));
         updateDash();
@@ -2120,10 +2152,13 @@ function onExec(p){
           // no floating timer to lose track of, so it survives backgrounding.
           if(cfg.strategy==='flip'){
             a.forceNextSide=closedPos.side==='BUY'?'SELL':'BUY';
-          }else if(cfg.strategy==='scalping'&&pnl>0){
-            // Only on a PROFITABLE close, per what was asked — a losing
-            // scalp does not force an immediate opposite entry.
-            a.forceNextSide=closedPos.side==='BUY'?'SELL':'BUY';
+          }else if(cfg.strategy==='scalping'&&pnl>0&&!closedPos.isFakeLeg){
+            // FIX #20 (continued) — same as paperClose above: only the
+            // natural leg queues a reversal; the reversed ("fake") leg it
+            // creates is exempt (isFakeLeg) so it doesn't immediately flip
+            // straight back — see checkExits for the new-candle-plus-
+            // profit gate that actually closes it.
+            a.forceNextSide=closedPos.side==='BUY'?'SELL':'BUY';a.forceNextSideIsFakeLeg=true;
           }else if(cfg.autoReverse&&a.signal!=='WAIT'&&a.signal!==closedPos.side&&!state.paused&&!state.stopped&&state.auto){
             setTimeout(()=>executeTrade(a,a.signal),500);
           }
