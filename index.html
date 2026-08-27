@@ -672,28 +672,14 @@ function log(msg){
   while(el.children.length>200)el.removeChild(el.lastChild);
 }
 function setText(id,txt){const e=$(id);if(e)e.textContent=txt;}
-// FIX ("i was getting the broker's notification whenever the bot closes a
-// trade but now am getting nothing"): this app never actually sent its own
-// notifications before — I can't see or change your broker app's own
-// notification settings from here, so I can't diagnose why THOSE stopped.
-// What I can do is give you a real, independent alert that doesn't depend
-// on the broker app at all — an actual Android/browser notification, fired
-// the moment a real trade closes, using the same PnL this app already
-// computes. Ask once for permission (a no-op if already granted/denied).
-function ensureNotifyPermission(){
-  if(!('Notification' in window))return;
-  if(Notification.permission==='default'){try{Notification.requestPermission();}catch(e){}}
-}
-function notifyTradeClose(side,label,pnl){
-  if(!('Notification' in window)||Notification.permission!=='granted')return;
-  try{
-    new Notification((pnl>=0?'Profit: ':'Loss: ')+side+' '+label,{
-      body:'Closed '+fmtPnL(pnl)+' • '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),
-      icon:'icon-192.png',
-      tag:'tpea-trade-close'
-    });
-  }catch(e){}
-}
+// REMOVED (per request — "remove that notification system... its making my
+// bot not react faster every after closing a trade, it has to open trades
+// immediately faster after closing one, let the broker platform do the
+// notification by itself"): ensureNotifyPermission()/notifyTradeClose()
+// used to live here, plus a call to notifyTradeClose() right after a real
+// close and a call to ensureNotifyPermission() on connect. All removed —
+// nothing here calls the Notification API anymore, and the broker's own
+// app is back to being the only thing that notifies you on a close.
 // FIX (new feature — mood color): megan-body.js's setMood() dispatches this
 // plain DOM event whenever the mood actually changes (it no-ops on repeats,
 // so this isn't firing every tick) — mirror it onto <body> as a class so
@@ -1050,7 +1036,6 @@ function handleCT(m){
       send(PT.SYMBOLS_LIST_REQ,{ctidTraderAccountId:state.accountId});
       send(PT.RECONCILE_REQ,{ctidTraderAccountId:state.accountId,returnProtectionOrders:true});
       initAsset();fastStartFromCache(state.currentSymbol);showScreen('dash');initChart();startNewsEngine();
-      ensureNotifyPermission();
       break;
     case PT.TRADER_RES:applyTrader(p.trader);break;
     case PT.SYMBOLS_LIST_RES:indexSymbols(p.symbol||[]);break;
@@ -2314,7 +2299,6 @@ function onExec(p){
           requestBalanceReconcile(preCloseBalance);
           a.positions.splice(idx,1);a.lastCloseAt=Date.now();
           log('Closed '+closedPos.side+' PnL '+fmtPnL(pnl));
-          notifyTradeClose(closedPos.side,a.label,pnl); // FIX ("getting nothing" for close alerts) — see notifyTradeClose() below
           // FIX #8 ("flip made $0.85 and stopped" / "scalping should flip
           // instantly on a profitable close, same candle"): both of these
           // used to schedule their re-entry with a one-shot setTimeout
