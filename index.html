@@ -537,7 +537,24 @@ let cfg={
   strategy:'confluence',
   lotSize:0.01,posPerEntry:3,maxPositions:0,basketProfit:5,cooldownSec:60,
   tf:15,slDollars:15,trailBuffer:2,maxHoldMin:5,maxSpreadPct:0.5,
-  autoReverse:true,profitProtect:true,dailyProfitTarget:0,dailyLossLimit:0
+  autoReverse:true,
+  // FIX ("closing with smaller tp... not the one i setup"): this used to
+  // default to true. Profit Protection is a trailing stop that arms once a
+  // trade reaches cfg.trailBuffer ($2 by default) in floating profit, then
+  // locks ~90% of whatever the CURRENT profit is at that moment minus a
+  // $1.50 cushion — and closes the trade the instant price pulls back to
+  // that locked level, completely independent of your actual configured
+  // Basket Profit (take-profit) target. On a volatile symbol like XAU/USD
+  // that lock can arm and trigger within seconds of opening, closing a
+  // trade for a few cents while the real take-profit you set is still far
+  // away — which is exactly what you were seeing. It's not a bug in the
+  // sense of doing the wrong math; it's a real feature (an early, smaller,
+  // safer profit) that was just silently overriding the TP you actually
+  // configured. Off by default now — trades run to your real Basket
+  // Profit target (or your real Stop Loss) and nothing in between. Flip
+  // Settings > Profit Protection back on any time you DO want that
+  // early-lock behavior.
+  profitProtect:false,dailyProfitTarget:0,dailyLossLimit:0
 };
 // Presets just auto-fill the same fields every strategy already uses — you can
 // still edit any of them by hand afterward. EMA Ride/Pullback additionally
@@ -2143,7 +2160,25 @@ function onExec(p){
           // FIX #20 (continued) — same tagging as paperOpen above, for a
           // real fill.
           const isFakeLeg=!!a.pendingIsFakeLeg;a.pendingIsFakeLeg=false;
-          a.positions.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:null,takeProfit:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false,initialRisk:cfg.slDollars/dollarPerUnitFor(pos.tradeData.volume,a),isFakeLeg,entryBarKey:a.currentBar?a.currentBar.t:null});
+          // FIX ("closing with smaller tp and even the fake sl not the one
+          // i setup"): this used to push stopLoss:null here, meaning a real
+          // filled position had NO local stop-loss recorded at all until
+          // checkTrail's profit-lock ratchet (see below) happened to arm one
+          // — i.e. only after the trade had already gone into some profit.
+          // Before that point, checkTrail's plain stop-loss check
+          // (`if(p.stopLoss==null)return;`) could never fire on this
+          // position locally. The broker-side order already carries the
+          // real relativeStopLoss/relativeTakeProfit you configured (see
+          // realOpen), so the money itself was never unprotected — but the
+          // client's own local view of this trade didn't match what was
+          // actually placed, which is exactly the "fake sl not the one i
+          // setup" symptom. Now it's computed the same way paperOpen()
+          // already does it: entry price +/- (cfg.slDollars converted
+          // through this symbol's real $-per-unit), so the client's local
+          // record matches the real order from the moment it fills.
+          const slDist=cfg.slDollars/dollarPerUnitFor(pos.tradeData.volume,a);
+          const initialStop=side==='BUY'?entry-slDist:entry+slDist;
+          a.positions.push({positionId:pos.positionId,side,entryPrice:entry,volume:pos.tradeData.volume,stopLoss:initialStop,takeProfit:null,openedAt:Date.now(),paper:false,peakPnL:0,trailingActive:false,initialRisk:slDist,isFakeLeg,entryBarKey:a.currentBar?a.currentBar.t:null});
         }
         log('Filled '+side+' '+a.label+' @ '+entry.toFixed(digits));
         updateDash();
