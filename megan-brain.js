@@ -213,36 +213,73 @@ ${JSON.stringify(FOREX_KNOWLEDGE)}
         return global.MEGAN_RESEARCH_RELAY || DEFAULT_RESEARCH_RELAY;
     }
 
+    // FIX ("AI not reaching the relay"): the original fetch() call here had
+    // no timeout at all — on a flaky mobile connection it could just hang
+    // indefinitely with no error, no retry, and no useful log line, which
+    // reads exactly like "not reaching the relay" from the user's side even
+    // though the request may still be in flight. This wraps any relay call
+    // with an AbortController timeout, one automatic retry on a transient
+    // failure (timeout, network drop, or a 5xx from the relay itself), and
+    // logs the real HTTP status + response body to the console on failure
+    // so the actual cause (relay down, rate-limited, bad API key upstream,
+    // etc.) is visible instead of a generic swallowed error.
+    async function fetchRelay(url, body, timeoutMs) {
+        let lastErr;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                    signal: controller.signal
+                });
+                clearTimeout(timer);
+                const text = await res.text();
+                if (!res.ok && res.status >= 500 && attempt === 0) {
+                    console.error(`[Megan relay] ${url} returned HTTP ${res.status} on attempt 1, retrying:`, text.slice(0, 300));
+                    lastErr = new Error(`Relay HTTP ${res.status}`);
+                    continue;
+                }
+                return { res, text };
+            } catch (e) {
+                clearTimeout(timer);
+                lastErr = e;
+                const reason = e.name === 'AbortError' ? `timed out after ${timeoutMs}ms` : e.message;
+                console.error(`[Megan relay] ${url} attempt ${attempt + 1} failed: ${reason}`);
+                if (attempt === 0) continue;
+            }
+        }
+        throw lastErr || new Error('Relay unreachable');
+    }
+
     async function askAI(systemPrompt, userPrompt, attachments) {
-        const res = await fetch(aiRelay(), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-
-            body: JSON.stringify({
-                systemPrompt,
-                userPrompt,
-                history: state.history.slice(-20),
-                attachments: attachments || []
-            })
-        });
-
-        const text = await res.text();
+        const { res, text } = await fetchRelay(aiRelay(), {
+            systemPrompt,
+            userPrompt,
+            history: state.history.slice(-20),
+            attachments: attachments || []
+        }, 20000);
 
         let data;
 
         try {
             data = JSON.parse(text);
         } catch {
+            console.error('[Megan relay] non-JSON response:', text.slice(0, 300));
             throw new Error('AI relay returned invalid JSON');
         }
 
         if (!res.ok) {
+            console.error(`[Megan relay] AI relay HTTP ${res.status}:`, data);
             throw new Error(data.error || `AI relay HTTP ${res.status}`);
         }
 
         const reply = data?.choices?.[0]?.message?.content;
 
         if (typeof reply !== 'string' || !reply.trim()) {
+            console.error('[Megan relay] AI relay returned no message:', data);
             throw new Error('AI returned no message');
         }
 
@@ -254,29 +291,24 @@ ${JSON.stringify(FOREX_KNOWLEDGE)}
             throw new Error('Megan research is disabled');
         }
 
-        const res = await fetch(researchRelay(), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-
-            body: JSON.stringify({
-                query: String(query || ''),
-                domains: options.domains || [],
-                recencyDays: options.recencyDays ?? null,
-                maxSources: options.maxSources ?? 8
-            })
-        });
-
-        const text = await res.text();
+        const { res, text } = await fetchRelay(researchRelay(), {
+            query: String(query || ''),
+            domains: options.domains || [],
+            recencyDays: options.recencyDays ?? null,
+            maxSources: options.maxSources ?? 8
+        }, 15000);
 
         let data;
 
         try {
             data = JSON.parse(text);
         } catch {
+            console.error('[Megan relay] research: non-JSON response:', text.slice(0, 300));
             throw new Error('Research relay returned invalid JSON');
         }
 
         if (!res.ok) {
+            console.error(`[Megan relay] research HTTP ${res.status}:`, data);
             throw new Error(data.error || `Research HTTP ${res.status}`);
         }
 

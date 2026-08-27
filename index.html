@@ -26,7 +26,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 .screen.active{display:flex;}
 
 /* Splash */
-#scrSplash{justify-content:center; align-items:center; text-align:center; z-index:100; background:radial-gradient(ellipse at 50% 20%,#1a0a12 0%,var(--bg) 60%); padding:24px;}
+#scrSplash{justify-content:center; align-items:center; text-align:center; z-index:100; background:radial-gradient(ellipse at 50% 20%,rgba(26,10,18,0.45) 0%,rgba(10,10,15,0.6) 60%); padding:24px;}
 .splash-logo{width:80px; height:80px; margin:0 auto 24px; background:linear-gradient(145deg,#1a1a25,#0f0f15); border-radius:20px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(255,0,51,0.3); box-shadow:0 0 30px rgba(255,0,51,0.2);}
 .splash-logo svg{width:50px; height:50px;}
 .splash-title{font-family:'Orbitron'; font-size:20px; font-weight:900; color:#fff; letter-spacing:3px; margin-bottom:8px;}
@@ -421,6 +421,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
     <select id="cfgStrategy" onchange="applyStrategyPreset()">
       <option value="confluence">Trend Confluence (default — trend/momentum/RSI/spread score)</option>
       <option value="scalping">Scalping (M1, tight SL, fast cooldown)</option>
+      <option value="scalping2">Scalping Two (M1, counter-trend — fades the current candle)</option>
       <option value="day">Day Trading (M15, moderate SL, hours-long hold)</option>
       <option value="swing">Swing Trading (H1, wider SL, multi-day hold)</option>
       <option value="position">Position Trading (H1, widest SL, week+ hold)</option>
@@ -544,6 +545,13 @@ let cfg={
 // run on the same trend/momentum/RSI/spread confluence engine, just tuned.
 const STRATEGY_PRESETS={
   scalping:{tf:1,slDollars:8,basketProfit:5,cooldownSec:5,maxHoldMin:8,hint:'M1 entries, tight $8 stop, fast 5s re-entry, 8min max hold.'},
+  // New strategy, additive only — does not touch Scalping's own code path
+  // above. Same tf/SL/cooldown shape as Scalping, but the entry direction
+  // is inverted: see computeScalpingTwoSignal — it reads the current
+  // candle's own direction (close vs open) and fades it, buying while the
+  // candle is printing red and selling while it's printing green, instead
+  // of following the trend/momentum confluence engine.
+  scalping2:{tf:1,slDollars:8,basketProfit:5,cooldownSec:5,maxHoldMin:8,hint:'M1 entries, same tight $8 stop and 5s re-entry as Scalping, but trades AGAINST the current candle — sells while it is printing a buy (green) candle, buys while it is printing a sell (red) candle.'},
   day:{tf:15,slDollars:15,basketProfit:20,cooldownSec:60,maxHoldMin:720,hint:'M15 entries, $15 stop, can hold up to 12 hours.'},
   swing:{tf:60,slDollars:30,basketProfit:50,cooldownSec:600,maxHoldMin:4320,hint:'H1 entries, $30 stop, can hold up to 3 days.'},
   position:{tf:60,slDollars:50,basketProfit:100,cooldownSec:3600,maxHoldMin:20160,hint:'H1 entries, $50 stop, can hold up to 14 days.'},
@@ -563,7 +571,7 @@ const STRATEGY_PRESETS={
   emaRide:{hint:'Uses the Timeframe below for EMA5/13/89. No fixed take-profit — Basket Profit is ignored, it exits on a trend flip instead.'},
   emaPullback:{slDollars:15,basketProfit:22.5,hint:'Uses the Timeframe below for EMA5/13/89. Basket Profit auto-set to 1.5x your SL (the "1:1.5" target) — edit either if you want a different ratio.'}
 };
-const STRATEGY_LABELS={confluence:'Trend Confluence',scalping:'Scalping',day:'Day Trading',swing:'Swing Trading',position:'Position Trading',flip:'Flip',emaRide:'EMA Trend — Ride',emaPullback:'EMA Trend — Pullback'};
+const STRATEGY_LABELS={confluence:'Trend Confluence',scalping:'Scalping',scalping2:'Scalping Two',day:'Day Trading',swing:'Swing Trading',position:'Position Trading',flip:'Flip',emaRide:'EMA Trend — Ride',emaPullback:'EMA Trend — Pullback'};
 function applyStrategyPreset(){
   const key=$('cfgStrategy').value;
   const p=STRATEGY_PRESETS[key];
@@ -1547,7 +1555,32 @@ function computeIndicators(a){
 // completely different, purpose-built engine (see computeEmaSignal).
 function computeSignal(a){
   if(cfg.strategy==='emaRide'||cfg.strategy==='emaPullback'){computeEmaSignal(a);return;}
+  if(cfg.strategy==='scalping2'){computeScalpingTwoSignal(a);return;}
   computeConfluenceSignal(a);
+}
+// Scalping Two — trades AGAINST the current candle, on purpose: a candle
+// closing above its open ("buying") gets faded with a SELL, a candle
+// closing below its open ("selling") gets faded with a BUY. This is
+// deliberately independent of computeConfluenceSignal's EMA/momentum
+// trend engine above — it doesn't touch it, doesn't call it, and Scalping
+// (the original) is completely unaffected by this function existing.
+// Reads a.currentBar (the live, still-forming candle) so it reacts the
+// same tick-by-tick way every other engine here already does, rather than
+// waiting for a full candle to close.
+function computeScalpingTwoSignal(a){
+  if(!a.dataReady||!a.lastPrice){a.signal='WAIT';a.score=0;return;}
+  const bar=a.currentBar||a.bars1[a.bars1.length-1];
+  if(!bar){a.signal='WAIT';a.score=0;return;}
+  const dir=bar.c>bar.o?'SELL':bar.c<bar.o?'BUY':'WAIT';
+  a.signal=dir;a.score=dir!=='WAIT'?70:0;
+  // Same once-per-closed-bar streak bookkeeping as the confluence engine,
+  // so maybeTrade's existing streak>=streakNeeded gate works unchanged.
+  const barKey=a.currentBar?a.currentBar.t:null;
+  if(dir!=='WAIT'&&a.lastDir===dir){
+    if(barKey!=null&&barKey!==a.lastStreakBarTime){a.streak++;a.lastStreakBarTime=barKey;}
+  }else{
+    a.lastDir=dir;a.streak=dir==='WAIT'?0:1;a.lastStreakBarTime=barKey;
+  }
 }
 function computeConfluenceSignal(a){
   if(!a.dataReady||!a.lastPrice){a.signal='WAIT';a.score=0;return;}
@@ -1683,7 +1716,7 @@ function maybeTrade(a){
   // timing the EMA strategies already use above. Day/Swing/Position/
   // Confluence keep the original 2-candle confirmation since those are
   // meant to be more conservative, slower-timeframe styles.
-  const streakNeeded=cfg.strategy==='scalping'?1:2;
+  const streakNeeded=(cfg.strategy==='scalping'||cfg.strategy==='scalping2')?1:2;
   if(!a.dataReady||a.signal==='WAIT'||a.streak<streakNeeded)return;
   const now=Date.now();
   if(a.lastCloseAt&&now-a.lastCloseAt<cfg.cooldownSec*1000)return;

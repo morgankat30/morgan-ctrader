@@ -73,7 +73,14 @@ const matWire = new THREE.MeshBasicMaterial({
 
 /* ── INIT ── */
 function init() {
-  const container = document.getElementById('canvas-container');
+  // FIX (background robot not visible at all): this was looking for
+  // 'canvas-container', an id that doesn't exist anywhere in index.html —
+  // the actual element is #meganBodyContainer. getElementById returned
+  // null, so container.appendChild() below threw immediately and the
+  // entire module (scene/camera/lights/robot build/animation loop) never
+  // ran — nothing after this line ever executed. That's why she wasn't
+  // showing up: not a dimming/opacity issue, the 3D layer never started.
+  const container = document.getElementById('meganBodyContainer');
 
   // Scene
   scene = new THREE.Scene();
