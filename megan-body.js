@@ -770,7 +770,7 @@ function setState(state) {
    index.html's own CSS (cards, badges, borders) can shift the same way —
    this only recolors the materials that already exist; nothing about her
    shape or the rest of the scene changes. */
-const moodColors = { neutral: 0x00d4ff, good: 0x00ff66, bad: 0xff2244 };
+const moodColors = { neutral: 0x00d4ff, good: 0x00ff66, bad: 0xff2b1a }; // bad matches index.html's --red override exactly
 let currentMood = 'neutral';
 function setMood(mood) {
   if(!moodColors.hasOwnProperty(mood) || currentMood === mood) return;
