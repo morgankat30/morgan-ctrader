@@ -20,6 +20,11 @@ let soundOn = true;
 let micOn = false;
 let recognition = null;
 let captionTimer = null;
+// FIX (new feature — mood color, approach-on-reply, action commands): her
+// resting spot, so approachCamera()/returnHome() below can always find their
+// way back to wherever she actually starts, not a hardcoded guess.
+let homePos = new THREE.Vector3(0, 0, 0);
+let actionTimer = null;
 
 // Robot parts (for animation)
 const parts = {};
@@ -178,6 +183,7 @@ function init() {
 
   // Build Megan
   buildMegan();
+  homePos.copy(megan.position); // remember her real starting spot for returnHome()
 
   // Events
   window.addEventListener('resize', onResize);
@@ -697,6 +703,45 @@ function animate() {
     }
   }
 
+  // Jump (new feature — a real up-and-down hop with a squash/stretch
+  // landing, timed to match playAction('jump')'s 700ms window above)
+  if(currentState === 'jumping') {
+    const t = Math.min(1, walkTime / 0.5);
+    walkTime += dt;
+    const arc = Math.sin(Math.min(1, t) * Math.PI); // 0 -> 1 -> 0
+    megan.position.y = arc * 0.9;
+    if(parts.armL) parts.armL.rotation.x = -arc * 0.6;
+    if(parts.armR) parts.armR.rotation.x = -arc * 0.6;
+    if(parts.legL) parts.legL.rotation.x = arc * 0.3;
+    if(parts.legR) parts.legR.rotation.x = arc * 0.3;
+    if(parts.torso) parts.torso.scale.set(1 - arc * 0.08, 1 + arc * 0.12, 1 - arc * 0.08);
+    if(t >= 1) megan.position.y = 0;
+  } else if(megan.position.y !== 0 && currentState !== 'dancing') {
+    megan.position.y += (0 - megan.position.y) * 0.2;
+  }
+
+  // Dance (new feature — playful bounce + spin + arm pump, no real dance
+  // logic needed, just something clearly deliberate and fun on command)
+  if(currentState === 'dancing') {
+    megan.position.y = Math.abs(Math.sin(time * 6)) * 0.35;
+    megan.rotation.y += dt * 2.4;
+    if(parts.armL) parts.armL.rotation.z = 0.9 + Math.sin(time * 9) * 0.5;
+    if(parts.armR) parts.armR.rotation.z = -0.9 - Math.sin(time * 9 + Math.PI) * 0.5;
+    if(parts.legL) parts.legL.rotation.x = Math.sin(time * 9) * 0.4;
+    if(parts.legR) parts.legR.rotation.x = Math.sin(time * 9 + Math.PI) * 0.4;
+    if(parts.head) parts.head.rotation.z = Math.sin(time * 5) * 0.15;
+  }
+
+  // Wave (new feature — one raised arm greeting, on command)
+  if(currentState === 'waving') {
+    if(parts.armR) {
+      parts.armR.rotation.x = -2.1;
+      parts.armR.rotation.z = -0.4 + Math.sin(time * 10) * 0.35;
+    }
+    if(parts.arms.right[1]) parts.arms.right[1].rotation.x = -0.4;
+    if(parts.head) parts.head.rotation.y = -0.2;
+  }
+
   // Render
   composer.render();
 }
@@ -715,6 +760,71 @@ function setState(state) {
   // FIX: no HUD panel in this app (the demo's own #hud-dot/#hud-status
   // don't exist here) — state still fully drives her animation below,
   // it's just not also mirrored into a debug readout.
+}
+
+/* ── MOOD (new feature) ── the whole robot's glow color, tied to how the
+   bot is actually doing — green while trading is net positive, red while
+   it's net negative, back to her normal cyan otherwise. index.html calls
+   window.MeganHologram.setMood(...) from updateDash(), where it already
+   knows the real floating/today P&L. Also fires a plain DOM CustomEvent so
+   index.html's own CSS (cards, badges, borders) can shift the same way —
+   this only recolors the materials that already exist; nothing about her
+   shape or the rest of the scene changes. */
+const moodColors = { neutral: 0x00d4ff, good: 0x00ff66, bad: 0xff2244 };
+let currentMood = 'neutral';
+function setMood(mood) {
+  if(!moodColors.hasOwnProperty(mood) || currentMood === mood) return;
+  currentMood = mood;
+  const hex = moodColors[mood];
+  [matCyanGlow, matEye, matBlueGlow].forEach(m => { if(m){ m.color.setHex(hex); m.emissive.setHex(hex); } });
+  if(parts.floorRing) parts.floorRing.material.color.setHex(hex);
+  try{ document.dispatchEvent(new CustomEvent('megan-mood', { detail: { mood } })); }catch(e){}
+}
+
+/* ── APPROACH / RETREAT (new feature) — "come closer to reply, then go
+   back". Reuses the exact same walk-cycle animation as auto-wander/
+   walkTo below (just a different target point), so this doesn't need its
+   own movement code — she just walks to a spot nearer the camera, then
+   walks back to where she actually started (homePos), same as any other
+   walk. ── */
+function approachCamera() {
+  if(!camera) return;
+  // A point on the line from her home spot toward the camera, stopping
+  // well short of it so she's still fully in frame, just closer/bigger.
+  const dir = new THREE.Vector3().subVectors(camera.position, homePos).normalize();
+  const dist = homePos.distanceTo(camera.position) * 0.45;
+  targetPos.set(homePos.x + dir.x * dist, 0, homePos.z + dir.z * dist);
+  isWalking = true;
+  setState('walking');
+}
+function returnHome() {
+  targetPos.copy(homePos);
+  isWalking = true;
+  setState('walking');
+}
+
+/* ── ACTION COMMANDS (new feature) — "jump", "dance", etc. megan-brain.js
+   calls window.MeganHologram.playAction(name) when it recognizes one of
+   these in what you actually asked her to do. Each one is timed and always
+   hands control back to idle/auto-wander on its own — nothing here can get
+   her stuck in a pose. ── */
+function playAction(name) {
+  if(actionTimer){ clearTimeout(actionTimer); actionTimer = null; }
+  if(name === 'jump') {
+    isWalking = false;
+    setState('jumping');
+    walkTime = 0;
+    actionTimer = setTimeout(() => { setState('idle'); resetLimbs(); }, 700);
+  } else if(name === 'dance') {
+    isWalking = false;
+    setState('dancing');
+    walkTime = 0;
+    actionTimer = setTimeout(() => { setState('idle'); resetLimbs(); }, 3200);
+  } else if(name === 'wave') {
+    isWalking = false;
+    setState('waving');
+    actionTimer = setTimeout(() => { setState('idle'); resetLimbs(); }, 1800);
+  }
 }
 
 /* ── INPUT ── */
@@ -766,7 +876,7 @@ let wanderTimer = null;
 function startAutoWander() {
   if(wanderTimer) clearInterval(wanderTimer);
   wanderTimer = setInterval(() => {
-    if(currentState === 'talking' || currentState === 'listening' || currentState === 'thinking') return; // don't wander mid-conversation
+    if(currentState === 'talking' || currentState === 'listening' || currentState === 'thinking' || currentState === 'jumping' || currentState === 'dancing' || currentState === 'waving' || isWalking) return; // don't wander mid-conversation, mid-action, or mid-approach/return walk
     if(Math.random() > 0.45) {
       targetPos.set((Math.random()-0.5)*3, 0, (Math.random()-0.5)*3); // small radius — she should stay visible, not wander off-frame on a phone screen
       isWalking = true; setState('walking');
@@ -780,6 +890,10 @@ window.MeganHologram = {
   walkTo: (x, z) => { targetPos.set(x, 0, z); isWalking = true; setState('walking'); },
   getPos: () => ({ x: megan.position.x, z: megan.position.z }),
   getState: () => currentState,
+  setMood,
+  playAction,
+  approachCamera,
+  returnHome,
 };
 
 // Drive her "talking" animation from the app's ACTUAL speech, instead of
@@ -795,9 +909,13 @@ function hookMeganSpeech(){
     const originalSpeak = window.Megan.voice.speak;
     window.Megan.voice.speak = (text) => {
       setState('talking');
+      approachCamera(); // FIX (new feature) — "come closer to reply, then go back"
       originalSpeak(text);
       const estMs = Math.max(2500, (text || '').length * 65);
-      setTimeout(() => { if(currentState === 'talking') setState('idle'); }, estMs);
+      setTimeout(() => {
+        if(currentState === 'talking') setState('idle');
+        returnHome();
+      }, estMs);
     };
     window.Megan.voice.__meganBodyHooked = true;
     return true;

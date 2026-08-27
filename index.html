@@ -130,7 +130,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 .manual-row button:active{transform:scale(0.96);}
 
 /* Mini log */
-.mini-log{margin:0 16px 12px; background:#08080c; border:1px solid var(--line); border-radius:10px; padding:10px; height:64px; overflow:hidden; font-size:11px; font-family:monospace; color:#7feccb; line-height:1.5;}
+.mini-log{margin:0 16px 12px; background:#08080c; border:1px solid var(--line); border-radius:10px; padding:10px; height:220px; overflow-y:auto; -webkit-overflow-scrolling:touch; font-size:11px; font-family:monospace; color:#7feccb; line-height:1.5;}
 .mini-log div{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 
 /* Badge */
@@ -199,6 +199,17 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
    and card surface gets a translucent background further down so she's
    actually visible through them, the same way the earlier static photo was. */
 #meganBodyContainer{position:fixed; inset:0; z-index:0; pointer-events:none;}
+/* FIX (new feature — "should change the whole bot's color... green when
+   doing well, red when doing bad"): one blend-mode overlay tints
+   everything underneath it at once (the 3D robot AND the dashboard UI),
+   so this doesn't need per-component color overrides scattered everywhere.
+   Toggled by the 'megan-mood' event megan-body.js already dispatches from
+   setMood() — see the listener near the bottom of this file's script. */
+#moodTint{position:fixed; inset:0; z-index:999; pointer-events:none; background:transparent; mix-blend-mode:overlay; opacity:0; transition:opacity .6s ease, background .6s ease;}
+body.mood-good #moodTint{background:#00ff66; opacity:0.11;}
+body.mood-bad #moodTint{background:#ff2244; opacity:0.13;}
+body.mood-good #voiceCaption{border-color:rgba(0,255,102,0.45) !important;}
+body.mood-bad #voiceCaption{border-color:rgba(255,34,68,0.5) !important;}
 #meganBodyContainer canvas{pointer-events:none;}
 </style>
 <script type="importmap">
@@ -213,6 +224,7 @@ h1,h2,h3,.brand{font-family:'Orbitron',sans-serif;}
 <body>
 <div id="app">
 <div id="meganBodyContainer"></div>
+<div id="moodTint"></div>
 <script type="module" src="megan-body.js"></script>
 
 <div id="voiceCaption" class="hidden" style="position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 10px);transform:translateX(-50%);z-index:210;max-width:88vw;padding:8px 14px;border-radius:10px;background:rgba(10,10,15,0.75);backdrop-filter:blur(6px);border:1px solid rgba(0,240,255,0.3);color:#e8e8f0;font-family:'Rajdhani',sans-serif;font-size:12px;line-height:1.4;text-align:center;pointer-events:none;transition:opacity .25s;"></div>
@@ -649,9 +661,26 @@ function log(msg){
   const el=$('miniLog');if(!el)return;
   const t=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
   const d=document.createElement('div');d.textContent=t+' '+msg;el.prepend(d);
-  while(el.children.length>5)el.removeChild(el.lastChild);
+  // FIX ("history scroll down because u can't scroll... always disappearing"):
+  // this used to hard-cap at 5 lines — the 6th entry permanently deleted the
+  // oldest one, forever, no way to get it back. Combined with the box below
+  // being a fixed 64px with overflow:hidden (see .mini-log), you never had
+  // more than 2-3 lines visible or accessible at all. Raised the retained
+  // history to 200 entries and made the box a real scrollable panel (see
+  // .mini-log: height:220px; overflow-y:auto) so you can actually scroll
+  // back through what she's done instead of it vanishing after 5 lines.
+  while(el.children.length>200)el.removeChild(el.lastChild);
 }
 function setText(id,txt){const e=$(id);if(e)e.textContent=txt;}
+// FIX (new feature — mood color): megan-body.js's setMood() dispatches this
+// plain DOM event whenever the mood actually changes (it no-ops on repeats,
+// so this isn't firing every tick) — mirror it onto <body> as a class so
+// the CSS above (#moodTint, #voiceCaption) can react without this file and
+// megan-body.js needing to import each other.
+document.addEventListener('megan-mood',function(e){
+  document.body.classList.remove('mood-good','mood-bad','mood-neutral');
+  document.body.classList.add('mood-'+(e.detail&&e.detail.mood||'neutral'));
+});
 function fmt$(n){return '$'+(n||0).toFixed(2);}
 function fmtPnL(n){return (n>=0?'+':'')+n.toFixed(2);}
 function todayKey(){return new Date().toISOString().slice(0,10);}
@@ -908,6 +937,23 @@ function connectCT(){
 }
 function connectCTOpen(){
   clearInterval(state.hbTimer);clearInterval(state.balanceSyncTimer);
+  // FIX ("everything freezes after reconnect, only the economic calendar
+  // keeps moving"): a.subscribedSymbolId lives on state.assets, which stays
+  // in memory for the whole page session — it does NOT get reset just
+  // because the old WebSocket dropped. On reconnect, activateCtSymbol()
+  // saw a.subscribedSymbolId still matching the current symbol (left over
+  // from the OLD, now-dead socket) and treated that as "already
+  // subscribed, nothing to do" — so it never re-sent SUBSCRIBE_SPOTS_REQ on
+  // the NEW socket, which has zero live subscriptions of its own no matter
+  // what the old one had. No more SPOT_EVENT messages ever arrived after
+  // that, and since literally everything here (chart, signals, indicators,
+  // the whole dashboard) is driven off live price ticks, the entire app
+  // just sat there looking frozen. The economic calendar kept moving
+  // because it's on its own plain setInterval, completely unrelated to
+  // price data — exactly matching what you were seeing. Clearing this flag
+  // right before every fresh socket open forces a real re-subscribe, every
+  // single reconnect, instead of trusting stale state from the dead one.
+  Object.values(state.assets).forEach(x=>{x.subscribedSymbolId=null;});
   state.clientId=$('ctId').value.trim();state.clientSecret=$('ctSec').value.trim();state.accessToken=$('ctTok').value.trim();state.env=$('ctEnv').value;
   if(!state.clientId||!state.clientSecret||!state.accessToken){state.connecting=false;setConnectBtnEnabled(true);alert('Client ID, Client Secret and Access Token are all required.');return;}
   saveCreds();showLoading('Connecting to cTrader...');
@@ -2033,11 +2079,31 @@ function checkExits(a){
   // strategy) on the first profitable moment of a genuinely new candle,
   // rather than flipping straight back on the very next profitable tick.
   const holdingFakeLeg=cfg.strategy==='scalping'&&a.positions.some(p=>p.isFakeLeg&&a.currentBar&&p.entryBarKey===a.currentBar.t);
-  // Ride mode has no fixed profit target — see checkEmaTrendFlipExit — so skip
-  // the basket-profit close for that one style only. Flip now uses this same
-  // basket-profit take-profit like everything else — see the FIX note above
-  // checkTrail for why its old separate exit mechanism was removed.
-  if(cfg.strategy!=='emaRide'&&!holdingFakeLeg&&a.floatingPnL>=cfg.basketProfit){log('Basket profit: '+fmtPnL(a.floatingPnL));closeAllPositions(a);return;}
+  // FIX ("bot can take tp at 1.48 but broker shows only 0.08 — remove that
+  // system completely"): this used to run for REAL trades too, racing
+  // against the real broker-side take-profit that realOpen() already sends
+  // with every order (relativeTakeProfit — see the comment there). Here's
+  // the actual mechanism that was causing the mismatch: this check polls
+  // a.floatingPnL (computed locally from the last price tick) on every
+  // tick, and the INSTANT it crosses cfg.basketProfit, it fires a manual
+  // CLOSE_POSITION_REQ — a real network round trip to the broker. Whatever
+  // number got logged/shown here was the floating PnL AT THE MOMENT OF
+  // DETECTION, not the actual fill. By the time that manual close request
+  // reached the broker and actually executed, price had often already
+  // moved back — sometimes a lot, on a fast symbol like XAU/USD — so the
+  // real confirmed deal came back far smaller than what was shown here.
+  // That's "1.48 vs 0.08": not a display bug, a real race between a slow
+  // client-side guess and the broker's own execution.
+  // The broker-side relativeTakeProfit doesn't have that problem — it's
+  // enforced by the broker's own matching engine at the exact price you
+  // configured, no client round trip, no guessing. So this client-side
+  // close is now paper-only, where there IS no real broker round trip to
+  // race against (the "fill" IS the local calculation, so it can't
+  // mismatch anything). Every real leg still gets its own genuine,
+  // broker-guaranteed take-profit and stop-loss from realOpen() — nothing
+  // about that was touched or weakened.
+  const allPaper=a.positions.length>0&&a.positions.every(p=>p.paper);
+  if(cfg.strategy!=='emaRide'&&!holdingFakeLeg&&allPaper&&a.floatingPnL>=cfg.basketProfit){log('Basket profit: '+fmtPnL(a.floatingPnL));closeAllPositions(a);return;}
   checkEmaTrendFlipExit(a);
   if(!a.positions.length)return; // may have just been closed by one of the checks above
   // Max hold time
@@ -2416,6 +2482,14 @@ function updateDash(){
   const a=state.assets[state.currentSymbol];if(!a)return;
   const totalPnL=a.floatingPnL+(state.paper?0:state.todayPnl);
   const el=$('dashPnl');if(el){el.textContent=fmtPnL(totalPnL);el.className='pnl-big '+(totalPnL>=0?'pos':'neg');}
+  // FIX (new feature — "when it's doing well the background robot should
+  // turn green, when doing bad turn red"): aggregate performance (today's
+  // realized + whatever's floating right now) drives her mood color. Small
+  // threshold so she doesn't flicker between colors on noise around $0.
+  if(window.MeganHologram){
+    const perf=totalPnL;
+    window.MeganHologram.setMood(perf>0.05?'good':(perf<-0.05?'bad':'neutral'));
+  }
   setText('stBal',fmt$(state.paper?state.paperBalance:state.balance));
   setText('stBalLbl',state.paper?'Balance (Paper)':'Balance ('+(state.env==='live'?'Live':'Demo')+')');
   setText('stEq',fmt$(state.equity));

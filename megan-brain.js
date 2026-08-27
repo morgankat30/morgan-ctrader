@@ -736,6 +736,26 @@ Return JSON only:
     function tryCommand(t) {
         if (/pick|choose|recommend|best strategy|which strategy|what strategy/.test(t) && /strateg|mode/.test(t)) { recommendMode(); return true; }
         if (/\bexplain\b|what('s| is) happening|what are you seeing|talk me through/.test(t)) { explainChart(); return true; }
+        // FIX (new feature — "when i ask her to do anything it should do it
+        // even if jumping or dancing"): real, physical actions on the body
+        // layer, not just a spoken reply. window.MeganHologram is the same
+        // bridge object megan-body.js already exposes for everything else
+        // (setState, walkTo) — playAction just adds these on top of it.
+        if (/\bjump\b/.test(t)) {
+            if (window.MeganHologram) { window.MeganHologram.playAction('jump'); speak('On it.'); }
+            else speak('I don\'t have a body to jump with right now.');
+            return true;
+        }
+        if (/\bdance\b/.test(t)) {
+            if (window.MeganHologram) { window.MeganHologram.playAction('dance'); speak('Watch this.'); }
+            else speak('I don\'t have a body to dance with right now.');
+            return true;
+        }
+        if (/\bwave\b/.test(t)) {
+            if (window.MeganHologram) { window.MeganHologram.playAction('wave'); speak('Hey there.'); }
+            else speak('I don\'t have a body to wave with right now.');
+            return true;
+        }
         // FIX (Megan) — "she's supposed to log in/out once I command it,
         // using saved details": genuinely missing before — connect/disconnect
         // now exist on the adapter (see index.html), wired here the same
@@ -860,7 +880,13 @@ Return JSON only:
         try { recognition.start(); } catch (e) {}
     }
     function stopListening() { micShouldBeOn = false; if (recognition) { try { recognition.stop(); } catch (e) {} } }
-    function setMic(on) { micShouldBeOn = !!on; if (on) startListening(); else stopListening(); }
+    function setMic(on) {
+        micShouldBeOn = !!on;
+        if (on) startListening(); else stopListening();
+        // FIX (new feature — mood/approach/action work): give the body its
+        // actual listening pose instead of that state sitting unused.
+        try { if (window.MeganHologram) window.MeganHologram.setState(on ? 'listening' : 'idle'); } catch (e) {}
+    }
 
     function getUserName() { try { return localStorage.getItem('megan_user_name') || null; } catch (e) { return null; } }
     function setUserName(name) { try { localStorage.setItem('megan_user_name', name); } catch (e) {} }
