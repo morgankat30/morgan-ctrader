@@ -672,6 +672,28 @@ function log(msg){
   while(el.children.length>200)el.removeChild(el.lastChild);
 }
 function setText(id,txt){const e=$(id);if(e)e.textContent=txt;}
+// FIX ("i was getting the broker's notification whenever the bot closes a
+// trade but now am getting nothing"): this app never actually sent its own
+// notifications before — I can't see or change your broker app's own
+// notification settings from here, so I can't diagnose why THOSE stopped.
+// What I can do is give you a real, independent alert that doesn't depend
+// on the broker app at all — an actual Android/browser notification, fired
+// the moment a real trade closes, using the same PnL this app already
+// computes. Ask once for permission (a no-op if already granted/denied).
+function ensureNotifyPermission(){
+  if(!('Notification' in window))return;
+  if(Notification.permission==='default'){try{Notification.requestPermission();}catch(e){}}
+}
+function notifyTradeClose(side,label,pnl){
+  if(!('Notification' in window)||Notification.permission!=='granted')return;
+  try{
+    new Notification((pnl>=0?'Profit: ':'Loss: ')+side+' '+label,{
+      body:'Closed '+fmtPnL(pnl)+' • '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),
+      icon:'icon-192.png',
+      tag:'tpea-trade-close'
+    });
+  }catch(e){}
+}
 // FIX (new feature — mood color): megan-body.js's setMood() dispatches this
 // plain DOM event whenever the mood actually changes (it no-ops on repeats,
 // so this isn't firing every tick) — mirror it onto <body> as a class so
@@ -1028,6 +1050,7 @@ function handleCT(m){
       send(PT.SYMBOLS_LIST_REQ,{ctidTraderAccountId:state.accountId});
       send(PT.RECONCILE_REQ,{ctidTraderAccountId:state.accountId,returnProtectionOrders:true});
       initAsset();fastStartFromCache(state.currentSymbol);showScreen('dash');initChart();startNewsEngine();
+      ensureNotifyPermission();
       break;
     case PT.TRADER_RES:applyTrader(p.trader);break;
     case PT.SYMBOLS_LIST_RES:indexSymbols(p.symbol||[]);break;
@@ -1787,7 +1810,28 @@ function maybeTrade(a){
   const hasPos=a.positions.length>0;
   const sameDir=hasPos&&a.positions[0].side===a.signal;
   if(hasPos&&sameDir)return;
-  if(hasPos&&!sameDir){closeAllPositions(a);return;}
+  // FIX ("still closing below my tp and even below my sl... follow my
+  // setup always, in all strategies"): this used to call
+  // closeAllPositions() the INSTANT the signal flipped direction, for
+  // every single strategy, no exceptions. On a fast-moving symbol like
+  // XAU/USD on a scalping timeframe, the signal can flip back and forth
+  // almost every tick — your own log shows it: open, closed 40 seconds
+  // later for -0.34, open again, closed for +0.07, open again... none of
+  // those tiny amounts are your real $8 stop or your real basket-profit
+  // target, because this was closing the trade for an unrelated reason
+  // (the signal changed its mind) before price ever got anywhere near
+  // either one. That's on top of the earlier fix that stopped a separate
+  // system from racing the broker's own TP — this was a second, different
+  // system doing the same kind of damage. A held position now ONLY ever
+  // closes for one of three real reasons: it hits the take-profit you
+  // configured, it hits the stop-loss you configured, or it hits your Max
+  // Hold Time — all still fully active below and in checkExits/checkTrail,
+  // completely untouched. If the signal flips while a position is open,
+  // the bot now just leaves that position alone and waits — it simply
+  // won't open a NEW trade in the old direction (sameDir check above
+  // already prevents that). Once the open position actually closes on its
+  // own real TP/SL/max-hold, the next tick is free to open fresh in
+  // whatever direction the signal is showing by then.
   if(!hasPos&&!isMomentumFadingAgainst(a,a.signal))executeTrade(a,a.signal);
 }
 // FIX #19 (continued) — true only for Scalping, only when momentum has
@@ -2270,6 +2314,7 @@ function onExec(p){
           requestBalanceReconcile(preCloseBalance);
           a.positions.splice(idx,1);a.lastCloseAt=Date.now();
           log('Closed '+closedPos.side+' PnL '+fmtPnL(pnl));
+          notifyTradeClose(closedPos.side,a.label,pnl); // FIX ("getting nothing" for close alerts) — see notifyTradeClose() below
           // FIX #8 ("flip made $0.85 and stopped" / "scalping should flip
           // instantly on a profitable close, same candle"): both of these
           // used to schedule their re-entry with a one-shot setTimeout
