@@ -1438,6 +1438,7 @@ function bnSubscribe(a){
 function deactivateAsset(key){
   const a=state.assets[key];if(!a)return;
   a.tradingEnabled=false;
+  a.fakeLegBias=null;a.forceNextSide=null; // FIX #21 (continued) — don't carry a same-side profit-cycling bias over to whatever pair gets selected next
   // FIX #17 (the actual cause of "everything is stuck, chart frozen,
   // positions stuck at 0.00 forever" right after switching pairs): this
   // sent the close request for any open positions AND cut the asset's live
@@ -2013,6 +2014,37 @@ function closeOnePosition(symKey,idx){
   else{realClose(a,pos);} // real close removes it from a.positions once EXECUTION_EVENT confirms the fill
 }
 
+// FIX #21 ("hold, but while taking profits, not just sitting there"):
+// FIX #20 held the reversed side open without closing, even through
+// profitable moments, until a whole new candle arrived — that's not what
+// was actually wanted. This replaces it: a profitable original-leg close
+// starts a same-side "bias" (a.fakeLegBias = {side, barKey}) in the
+// opposite direction. Every time a position on that SAME side closes in
+// profit while still inside the candle the bias started on, it immediately
+// re-enters the SAME side again — banking profit repeatedly, back to back,
+// instead of waiting motionless. Only once the candle actually changes
+// does the bias end and control return to normal strategy (no forced
+// side) — matching "continue with the fake side up to the new candle."
+function handleScalpingCloseReversal(a,closedPos,pnl){
+  if(pnl<=0)return; // a losing close never forces anything, same as before
+  if(closedPos.isFakeLeg&&a.fakeLegBias&&closedPos.side===a.fakeLegBias.side){
+    if(a.currentBar&&a.currentBar.t===a.fakeLegBias.barKey){
+      // Still the same candle the bias started on — bank profit and
+      // immediately re-enter the SAME side again.
+      a.forceNextSide=a.fakeLegBias.side;a.forceNextSideIsFakeLeg=true;
+    }else{
+      // A new candle has started — bias ends, hand control back to
+      // normal strategy.
+      a.fakeLegBias=null;
+    }
+  }else{
+    // A natural, non-biased profitable close — start a new bias in the
+    // opposite direction, anchored to the candle this began on.
+    const oppSide=closedPos.side==='BUY'?'SELL':'BUY';
+    a.fakeLegBias={side:oppSide,barKey:a.currentBar?a.currentBar.t:null};
+    a.forceNextSide=oppSide;a.forceNextSideIsFakeLeg=true;
+  }
+}
 function paperClose(a,pos){
   const exit=a.lastPrice;const pnl=(pos.side==='BUY'?exit-pos.entryPrice:pos.entryPrice-exit)*dollarPerUnitFor(pos.volume,a);
   state.paperBalance+=pnl;state.todayPnl+=pnl;
@@ -2022,19 +2054,8 @@ function paperClose(a,pos){
     // Same FIX #8 as the real-close handler — queue it for the next tick
     // instead of a one-shot setTimeout that a backgrounded tab can drop.
     a.forceNextSide=pos.side==='BUY'?'SELL':'BUY';
-  }else if(cfg.strategy==='scalping'&&pnl>0&&!pos.isFakeLeg){
-    // FIX #20 ("don't flip straight back to the original side — hold the
-    // reversed side through the candle change, only flip back once THAT
-    // one is profitable too"): only the natural, signal-driven leg queues
-    // a reversal now. The reversed ("fake") leg this creates is exempt from
-    // that same trigger (see !pos.isFakeLeg) and from closing at all until
-    // checkExits below confirms a new candle has actually started — so it
-    // rides out the rest of THIS candle regardless of a brief profit dip,
-    // then closes and hands control back to normal strategy on the first
-    // profitable moment of a genuinely new candle. Nothing forces a third
-    // leg — after the fake leg closes, whichever side the live signal
-    // actually favors is what trades next, not another automatic flip.
-    a.forceNextSide=pos.side==='BUY'?'SELL':'BUY';a.forceNextSideIsFakeLeg=true;
+  }else if(cfg.strategy==='scalping'){
+    handleScalpingCloseReversal(a,pos,pnl);
   }else if(cfg.autoReverse&&a.signal!=='WAIT'&&a.signal!==pos.side){
     setTimeout(()=>{if(!state.paused&&!state.stopped&&state.auto)executeTrade(a,a.signal);},500);
   }
@@ -2096,14 +2117,6 @@ function updatePositions(a){
 function checkExits(a){
   if(!a.positions.length)return;
   const now=Date.now();
-  // FIX #20 (continued) — a "fake leg" (the forced reversal after a
-  // profitable scalping close) is exempt from the normal basket-profit
-  // close until the candle it opened on has actually finished — per what
-  // was asked: hold the reversed side through the rest of that candle and
-  // into the new one, THEN close it (and hand control back to normal
-  // strategy) on the first profitable moment of a genuinely new candle,
-  // rather than flipping straight back on the very next profitable tick.
-  const holdingFakeLeg=cfg.strategy==='scalping'&&a.positions.some(p=>p.isFakeLeg&&a.currentBar&&p.entryBarKey===a.currentBar.t);
   // FIX ("bot can take tp at 1.48 but broker shows only 0.08 — remove that
   // system completely"): this used to run for REAL trades too, racing
   // against the real broker-side take-profit that realOpen() already sends
@@ -2127,8 +2140,13 @@ function checkExits(a){
   // mismatch anything). Every real leg still gets its own genuine,
   // broker-guaranteed take-profit and stop-loss from realOpen() — nothing
   // about that was touched or weakened.
+  // FIX #21 (continued) — the old holdingFakeLeg gate that delayed this
+  // close for a whole candle is gone; profit gets taken immediately again,
+  // same as any other position. The "hold the bias" behavior now happens
+  // by re-entering the SAME side right after (handleScalpingCloseReversal
+  // above), not by refusing to close in the first place.
   const allPaper=a.positions.length>0&&a.positions.every(p=>p.paper);
-  if(cfg.strategy!=='emaRide'&&!holdingFakeLeg&&allPaper&&a.floatingPnL>=cfg.basketProfit){log('Basket profit: '+fmtPnL(a.floatingPnL));closeAllPositions(a);return;}
+  if(cfg.strategy!=='emaRide'&&allPaper&&a.floatingPnL>=cfg.basketProfit){log('Basket profit: '+fmtPnL(a.floatingPnL));closeAllPositions(a);return;}
   checkEmaTrendFlipExit(a);
   if(!a.positions.length)return; // may have just been closed by one of the checks above
   // Max hold time
@@ -2311,13 +2329,8 @@ function onExec(p){
           // no floating timer to lose track of, so it survives backgrounding.
           if(cfg.strategy==='flip'){
             a.forceNextSide=closedPos.side==='BUY'?'SELL':'BUY';
-          }else if(cfg.strategy==='scalping'&&pnl>0&&!closedPos.isFakeLeg){
-            // FIX #20 (continued) — same as paperClose above: only the
-            // natural leg queues a reversal; the reversed ("fake") leg it
-            // creates is exempt (isFakeLeg) so it doesn't immediately flip
-            // straight back — see checkExits for the new-candle-plus-
-            // profit gate that actually closes it.
-            a.forceNextSide=closedPos.side==='BUY'?'SELL':'BUY';a.forceNextSideIsFakeLeg=true;
+          }else if(cfg.strategy==='scalping'){
+            handleScalpingCloseReversal(a,closedPos,pnl); // FIX #21 (continued) — same shared logic as paperClose above
           }else if(cfg.autoReverse&&a.signal!=='WAIT'&&a.signal!==closedPos.side&&!state.paused&&!state.stopped&&state.auto){
             setTimeout(()=>executeTrade(a,a.signal),500);
           }
