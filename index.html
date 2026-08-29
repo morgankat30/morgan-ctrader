@@ -2595,11 +2595,47 @@ window.MeganBotAdapter = {
     return 'Balance is $'+(bal||0).toFixed(2)+'. '+(a&&a.positions.length?a.positions.length+' position'+(a.positions.length===1?'':'s')+' open on '+a.label:'No positions open.')+' Trading is '+(state.stopped?'stopped':(state.auto?'running on auto':'manual')) +', strategy is '+STRATEGY_LABELS[cfg.strategy]+'.';
   },
 
+  // FIX (Megan) — "her analysis should be HERS, not the bot's": these two
+  // give her something to reason over independently instead of the bot's
+  // own pre-computed conclusions (emaFast/emaSlow/rsi/signal above). A real
+  // screenshot of the actual rendered chart for genuine vision analysis,
+  // plus the raw OHLC numbers with none of the bot's own indicator math
+  // applied — she forms her own read, not a restatement of ours.
+  getChartImage(){
+    if(!tvChart||typeof tvChart.takeScreenshot!=='function')return null;
+    try{const canvas=tvChart.takeScreenshot();return canvas.toDataURL('image/png');}
+    catch(e){return null;}
+  },
+  getRawCandles(n){
+    const a=state.assets[state.currentSymbol];if(!a||!a.bars1)return null;
+    const count=n||30;
+    return a.bars1.slice(-count).map(b=>({t:b.t,o:b.o,h:b.h,l:b.l,c:b.c}));
+  },
   getChartContext(){
     const a=state.assets[state.currentSymbol];if(!a)return null;
     const lines=[];
-    lines.push('Pair: '+a.label+', live price '+(a.lastPrice?a.lastPrice.toFixed(a.full?a.full.digits:5):'n/a'));
+    const digits=a.full?a.full.digits:5;
+    lines.push('Pair: '+a.label+', live price '+(a.lastPrice?a.lastPrice.toFixed(digits):'n/a'));
     lines.push('Signal: '+a.signal+', strength '+a.score+'%, streak '+a.streak);
+    // FIX (Megan) — "she can analyze the live chart of any market and tell
+    // me where it's going, like a professional trader": this only ever
+    // handed her the pre-computed signal label before, not the actual
+    // indicator readings underneath it — she couldn't say anything more
+    // specific than repeating what the signal badge already shows on
+    // screen. This adds the real numbers (EMA trend relationship, RSI,
+    // momentum, ATR) plus the last few closed candles' direction, so her
+    // analysis is grounded in the same live data the bot itself trades
+    // on, for whichever symbol is currently selected — not a fixed pair.
+    if(a.emaFast!=null&&a.emaSlow!=null){
+      lines.push('EMA fast '+a.emaFast.toFixed(digits)+' vs EMA slow '+a.emaSlow.toFixed(digits)+' ('+(a.emaFast>a.emaSlow?'fast above slow, bullish structure':'fast below slow, bearish structure')+')');
+    }
+    if(a.rsi!=null)lines.push('RSI(14): '+a.rsi.toFixed(1)+(a.rsi>=70?' (overbought)':a.rsi<=30?' (oversold)':' (neutral)'));
+    if(a.momentum!=null)lines.push('Momentum: '+a.momentum.toFixed(3)+'% over the last few candles');
+    if(a.atr!=null)lines.push('ATR(14): '+a.atr.toFixed(digits)+' (typical recent candle range)');
+    if(a.bars1&&a.bars1.length>=5){
+      const recent=a.bars1.slice(-5).map(b=>b.c>=b.o?'up':'down');
+      lines.push('Last 5 closed candles: '+recent.join(', '));
+    }
     const sb=$('sessionBadge');if(sb)lines.push(sb.textContent);
     lines.push('Strategy: '+STRATEGY_LABELS[cfg.strategy]);
     if(a.positions.length)lines.push(a.positions.length+' open position(s), floating P/L $'+(a.floatingPnL||0).toFixed(2));
@@ -2608,6 +2644,14 @@ window.MeganBotAdapter = {
 
   arm(){ if(!state.armed) toggleArm(); },
   disarm(){ if(state.armed){$('swArm').classList.remove('on');state.armed=false;saveCreds();} },
+  // FIX (Megan) — "she should be able to fire the trade after her analysis
+  // if she's 75% confident, but always ask my permission first": this is
+  // the actual firing mechanism, wired to the SAME manualTrade() the real
+  // BUY/SELL buttons use — same risk gate, same lot size, same everything.
+  // It's deliberately not called automatically anywhere in this file —
+  // megan-brain.js only calls it after the user has explicitly confirmed,
+  // never straight off a confidence number by itself.
+  fireTrade(side){ if(side!=='BUY'&&side!=='SELL')return false; manualTrade(side); return true; },
   // FIX (Megan) — "she's supposed to log in/out once I command it, using
   // saved details": there was genuinely no such capability wired up at all
   // — connectCT()/connectBN() only ever ran from the Start Now button, with

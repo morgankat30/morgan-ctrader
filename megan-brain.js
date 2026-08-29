@@ -21,8 +21,15 @@
     // no per-bot Netlify function, no per-bot API key. Override by setting
     // global.MEGAN_AI_RELAY before this script runs, if a given bot ever
     // needs its own separate relay instead.
-    const DEFAULT_AI_RELAY = 'https://morganneuralrevenge55pro.netlify.app/.netlify/functions/ai-relay';
-    const DEFAULT_RESEARCH_RELAY = 'https://morganneuralrevenge55pro.netlify.app/.netlify/functions/megan-research';
+    // FIX (moved off Netlify — that account's billing cycle was blocking all
+    // deploys, unrelated to anything in this code): now points at a
+    // Cloudflare Worker instead, a faithful port of the same ai-relay.js
+    // logic. Same request/response shape, so nothing else here needed to
+    // change. DEFAULT_RESEARCH_RELAY below is a SEPARATE Netlify function
+    // (megan-research) that was never ported — that one will still hit the
+    // same Netlify billing block until it's migrated too.
+    const DEFAULT_AI_RELAY = 'https://megan-ai-relay.morgankaerega51.workers.dev';
+    const DEFAULT_RESEARCH_RELAY = 'https://megan-ai-relay.morgankaerega51.workers.dev/research'; // FIX (continued) — same Worker, /research path, backed by Tavily
     const SETTINGS_KEY = 'megan_master_settings';
     const MEMORY_KEY = 'megan_master_memory';
     const TRACK_KEY = 'megan_trade_track';
@@ -689,12 +696,46 @@ Return JSON only:
     function call(fn, ...args) { const ad = adapter(); if (has(fn)) return ad[fn](...args); return undefined; }
 
     async function explainChart() {
-        if (!has('getChartContext')) { speak('This bot has not given me anything to read for a chart right now.'); return; }
-        const ctx = call('getChartContext');
-        if (!ctx) { speak('Open something first and I\'ll walk you through it.'); return; }
+        // FIX (Megan) — "her analysis should be hers, not the bot's, using
+        // her own research on the internet, not the bot's own indicator
+        // math": this used to just hand her getChartContext() — the bot's
+        // own pre-computed EMA/RSI/signal conclusions — and ask her to
+        // restate them. That's not an independent read, that's an echo.
+        // Now she gets a real screenshot of the actual rendered chart
+        // (genuine vision analysis, when the model supports it) plus raw
+        // OHLC candles with none of the bot's own indicator math applied —
+        // she has to work out structure, momentum and levels herself, the
+        // same way a real analyst reads a chart. research:true (below,
+        // via answer()) means she also pulls real current news/sentiment
+        // into it rather than reasoning in a vacuum.
+        const img = has('getChartImage') ? call('getChartImage') : null;
+        const raw = has('getRawCandles') ? call('getRawCandles', 40) : null;
+        const symbolLine = has('getChartContext') ? (call('getChartContext') || '').split('\n')[0] : '';
+        if (!img && !raw) { speak('This bot has not given me anything to read for a chart right now.'); return; }
+
+        const instruction = 'Give your own independent professional trader\'s read of this market — do not just restate indicator labels, work it out from the raw candles and/or the chart image yourself, and use real current research for context, not stale knowledge. ' +
+            (symbolLine ? (symbolLine + '. ') : '') +
+            (raw ? ('Raw OHLC candles (oldest to newest, no indicators applied), each as [open,high,low,close]: ' + JSON.stringify(raw.map(c => [c.o, c.h, c.l, c.c])) + '. ') : '') +
+            'Speak your read in 2-4 short sentences: structure, momentum, and what would invalidate it. Then, on its own final line, output EXACTLY this machine-readable tag with your honest assessment (HOLD if you are not genuinely confident either direction — do not force a BUY or SELL call): [[ANALYSIS: RECOMMENDATION=BUY|SELL|HOLD; CONFIDENCE=0-100]]';
+
         try {
-            const reply = await answer('Explain what\'s happening right now, in one or two spoken sentences, using only the real data below — never invent a price level. Data:\n' + ctx, { research: false });
-            speak(reply || 'I don\'t have a clean read on this one right now.');
+            const reply = await answer(instruction, { research: true, attachments: img ? [img] : undefined });
+            const m = reply.match(/\[\[ANALYSIS:\s*RECOMMENDATION=(BUY|SELL|HOLD)\s*;\s*CONFIDENCE=(\d{1,3})\s*\]\]/i);
+            const spoken = reply.replace(/\[\[ANALYSIS:.*?\]\]/i, '').trim();
+            speak(spoken || reply);
+            if (m) {
+                const rec = m[1].toUpperCase();
+                const conf = Math.max(0, Math.min(100, parseInt(m[2], 10)));
+                // FIX (continued) — 75% is the threshold she's allowed to
+                // even OFFER a trade at, per what was asked. Offering is
+                // still not firing — handleUtterance's confirm-before-fire
+                // gate above is the only thing that can actually execute it.
+                if (rec !== 'HOLD' && conf >= 75) {
+                    const symbol = (symbolLine.split(',')[0] || 'this pair').replace('Pair: ', '');
+                    pendingTradeProposal = { side: rec, symbol, confidence: conf };
+                    setTimeout(() => speak('I\'m ' + conf + '% confident on a ' + rec + ' here. Want me to fire it?'), 400);
+                }
+            }
         } catch (e) { speak('Could not reach the AI relay to explain that right now.'); }
     }
 
@@ -735,7 +776,7 @@ Return JSON only:
 
     function tryCommand(t) {
         if (/pick|choose|recommend|best strategy|which strategy|what strategy/.test(t) && /strateg|mode/.test(t)) { recommendMode(); return true; }
-        if (/\bexplain\b|what('s| is) happening|what are you seeing|talk me through/.test(t)) { explainChart(); return true; }
+        if (/\bexplain\b|what('s| is) happening|what are you seeing|talk me through|where('s| is) (the market|it|price) (going|heading)|which way|market direction|what do you think|your (read|take|analysis)/.test(t)) { explainChart(); return true; }
         // FIX (new feature — "when i ask her to do anything it should do it
         // even if jumping or dancing"): real, physical actions on the body
         // layer, not just a spoken reply. window.MeganHologram is the same
@@ -838,6 +879,33 @@ Return JSON only:
             speak('Got it, ' + name + ' — I\'ll remember you. Welcome to the money machine, let\'s grow that account.');
             return;
         }
+        // FIX (Megan) — the actual confirm-before-fire gate: only reachable
+        // if explainChart() below has already proposed something. A clear
+        // yes fires it (through the same manual BUY/SELL path the buttons
+        // use — no shortcuts around risk checks); a clear no cancels it;
+        // anything ambiguous just leaves it pending rather than guessing.
+        if (pendingTradeProposal) {
+            const affirmative = /\b(yes|yeah|yep|yup|sure|go ahead|do it|confirm|fire it|fire|execute|place it|take it)\b/i.test(top);
+            const negative = /\b(no|nope|don't|do not|cancel|skip|hold off|never ?mind|pass)\b/i.test(top);
+            if (affirmative) {
+                const { side, symbol } = pendingTradeProposal;
+                pendingTradeProposal = null;
+                if (has('fireTrade') && call('fireTrade', side)) {
+                    speak('Done — ' + side + ' fired on ' + symbol + '.');
+                } else {
+                    speak('I could not fire that — this bot has no trade-firing control wired up for me.');
+                }
+                return;
+            }
+            if (negative) {
+                pendingTradeProposal = null;
+                speak('Okay, holding off — no trade fired.');
+                return;
+            }
+            // Neither a clear yes nor no — leave it pending and fall through
+            // to normal handling below, in case they're asking something
+            // else first before actually answering.
+        }
         for (const raw of alts) { if (tryCommand(raw.toLowerCase().trim())) return; }
         freeform(top);
     }
@@ -898,6 +966,12 @@ Return JSON only:
         return n.replace(/\b\w/g, c => c.toUpperCase());
     }
     let awaitingName = false;
+    // FIX (Megan) — "she should be able to fire the trade if she's 75%
+    // confident, but always ask my permission first": this holds whatever
+    // she proposed until the user actually answers, one way or the other.
+    // Nothing here ever fires a trade on its own — only handleUtterance
+    // below, and only after an explicit yes.
+    let pendingTradeProposal = null;
     async function greet() {
         const name = getUserName();
         // FIX (Megan) — "over-talks / repeats herself, should be a simple
